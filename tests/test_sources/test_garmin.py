@@ -1,8 +1,10 @@
 """Tests for Garmin source: mappers, source orchestration, and sync endpoint."""
 
+import logging
 from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy import select
 
 from mycoach.models.activity import Activity
@@ -541,6 +543,42 @@ class TestGarminSource:
             assert result.errors is not None
             assert any("no usable Garmin health data" in e for e in result.errors)
 
+    def test_partial_day_logs_which_content_fields_are_null(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A day with some fields but no sleep must log which content came back null.
+
+        The old per-field ``field_status`` INFO log was deleted along with its
+        misleading ``isinstance`` checks, but a *partially*-populated day now
+        logs nothing at all: ``has_data`` is True so the empty-day WARNING never
+        fires, and nothing raised so nothing lands in ``errors``. That silent
+        partial shape is exactly the 13/08 symptom the spec opens with.
+        """
+        mock_client = MagicMock()
+        mock_client.get_stats.return_value = SAMPLE_STATS
+        mock_client.get_sleep_data.return_value = None
+        mock_client.get_hrv_data.return_value = None
+        mock_client.get_stress_data.return_value = None
+        mock_client.get_body_battery.return_value = None
+        mock_client.get_training_readiness.return_value = None
+        mock_client.get_training_status.return_value = None
+        mock_client.get_max_metrics.return_value = None
+        mock_client.get_respiration_data.return_value = None
+        mock_client.get_spo2_data.return_value = None
+
+        source = GarminSource(client=mock_client)
+
+        with caplog.at_level(logging.INFO):
+            _, has_data, failures = source._fetch_health_for_day(1, date(2026, 8, 13))
+
+        assert has_data is True
+        assert failures == []
+        info_logs = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert any(
+            "sleep_duration_minutes" in r.message and "partial data" in r.message
+            for r in info_logs
+        )
+
     async def test_auth_failure(self, setup_db) -> None:  # type: ignore[no-untyped-def]
         mock_client = MagicMock()
         mock_client.connect.return_value = False
@@ -786,3 +824,24 @@ class TestSnapshotHasData:
         )
         assert snapshot.raw_data is not None
         assert snapshot_has_data(snapshot) is False
+
+    def test_zero_valued_metric_counts_as_data(self) -> None:
+        """A zero is a real reading, not Garmin's null skeleton.
+
+        ``_safe_int(0)`` returns ``0``, not ``None``, so a snapshot whose only
+        non-null value is a zero-valued metric (e.g. a genuine 0-step rest day)
+        is treated as data. This is the intended behaviour: Garmin's actual
+        empty-day payload is all-null, never a zero — a zero means Garmin
+        answered with a real, if uneventful, value. Treating it as "no data"
+        would wrongly skip a briefing for a day Garmin did answer. If Garmin
+        ever sends a zero to *mean* "no reading" this pins the fact that
+        ``snapshot_has_data`` would score it as data anyway, so a future fix
+        for that must touch this test.
+        """
+        snapshot = map_health_snapshot(
+            user_id=1,
+            snapshot_date=date(2026, 8, 14),
+            stats={"totalSteps": 0},
+        )
+        assert snapshot.steps == 0
+        assert snapshot_has_data(snapshot) is True

@@ -16,6 +16,7 @@ from mycoach.sources.garmin.mappers import (
     import_health_snapshot,
     map_health_snapshot,
     snapshot_has_data,
+    snapshot_null_content_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,14 @@ class GarminSource(DataSource):
             logger.warning(
                 "Garmin health fetch for %s: response carried no usable values", day
             )
+        else:
+            null_fields = snapshot_null_content_fields(snapshot)
+            if null_fields:
+                logger.info(
+                    "Garmin health fetch for %s: partial data — null fields: %s",
+                    day,
+                    ", ".join(null_fields),
+                )
         return snapshot, has_data, failures
 
     @staticmethod

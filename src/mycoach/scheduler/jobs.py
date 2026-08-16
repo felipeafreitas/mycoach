@@ -17,6 +17,7 @@ from functools import partial
 
 from sqlalchemy import select
 
+from mycoach.coaching.context import get_today_health
 from mycoach.coaching.engine import CoachingEngine
 from mycoach.coaching.exceptions import NoAvailabilityConfigured, PipelineSkip
 from mycoach.config import get_settings
@@ -43,6 +44,20 @@ logger = logging.getLogger(__name__)
 USER_ID = 1  # Single-user MVP
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+# The fields that make a briefing about recovery rather than about nothing —
+# sleep, HRV, and Body Battery. A snapshot can pass the empty-day guard (it has
+# *some* content, e.g. resting HR and steps) while carrying none of these, which
+# is exactly the 13/08 symptom the spec opens with. Named here so the intent
+# behind the check below is legible, not a bare inline tuple.
+_RECOVERY_FIELDS = (
+    "sleep_duration_minutes",
+    "sleep_score",
+    "hrv_status",
+    "hrv_7day_avg",
+    "hrv_status_text",
+    "body_battery_morning",
+)
 
 
 def _run_async(coro):  # type: ignore[no-untyped-def]
@@ -257,8 +272,8 @@ async def _daily_briefing() -> None:
     try:
         sync_result = await _garmin_sync()
         empty_days = list(sync_result.empty_health_days)
-    except Exception as e:  # noqa: BLE001 - logged, and the briefing may still be viable
-        logger.warning("Scheduler: pre-briefing Garmin sync failed — %s", e)
+    except Exception as e:  # logged, and the briefing may still be viable
+        logger.error("Scheduler: pre-briefing Garmin sync failed — %s", e)
 
     if today in empty_days:
         raise PipelineSkip(
@@ -268,6 +283,17 @@ async def _daily_briefing() -> None:
 
     engine = CoachingEngine()
     async with async_session() as session:
+        # A day can carry some content (e.g. resting HR, steps) yet none of the
+        # fields the briefing exists to speak to. That is not "no data" — the
+        # skip above is deliberately narrow — but it must not pass silently.
+        today_health = await get_today_health(session, USER_ID, today)
+        if not any(field in today_health for field in _RECOVERY_FIELDS):
+            logger.warning(
+                "Scheduler: generating daily briefing for %s without any recovery "
+                "data (no sleep, HRV, or Body Battery)",
+                today,
+            )
+
         insight = await engine.generate_daily_briefing(session, USER_ID)
         logger.info("Scheduler: daily briefing generated")
 

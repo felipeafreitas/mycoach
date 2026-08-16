@@ -378,6 +378,17 @@ def snapshot_has_data(snapshot: DailyHealthSnapshot) -> bool:
     return any(getattr(snapshot, field) is not None for field in _CONTENT_FIELDS)
 
 
+def snapshot_null_content_fields(snapshot: DailyHealthSnapshot) -> list[str]:
+    """Names of the content fields that came back null on this snapshot.
+
+    Same source of truth as ``snapshot_has_data`` — the mapped snapshot, not
+    the raw response shape — so a caller can log which part of a *partial*
+    day was missing without resurrecting the old per-field ``isinstance``
+    checks that lied about emptiness.
+    """
+    return [field for field in _CONTENT_FIELDS if getattr(snapshot, field) is None]
+
+
 async def import_health_snapshot(session: AsyncSession, snapshot: DailyHealthSnapshot) -> bool:
     """Import a health snapshot, or update an existing one with newer data.
 
