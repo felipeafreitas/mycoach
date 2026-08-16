@@ -34,6 +34,7 @@ from mycoach.models.coaching import CoachingInsight
 from mycoach.models.job_run import JobRun
 from mycoach.models.plan import PlannedSession
 from mycoach.models.user import User
+from mycoach.sources.base import ImportResult
 from mycoach.sources.garmin.source import GarminSource
 from mycoach.sources.merger import merge_garmin_hevy
 
@@ -198,22 +199,28 @@ async def _get_user_email_pref(pref_field: str) -> bool:
 
 
 def job_garmin_sync() -> None:
-    """Sync health and activity data from Garmin Connect.
-
-    Fetches the last 2 days of data to handle timezone edge cases and overnight sync.
-    """
+    """Sync health and activity data from Garmin Connect."""
     logger.info("Scheduler: starting Garmin sync")
     _run_recorded_job("garmin_sync", _garmin_sync())
 
 
-async def _garmin_sync() -> None:
+async def _garmin_sync(days: int | None = None) -> ImportResult:
+    """Fetch and import a window of Garmin data, returning what was imported.
+
+    The window is wider than "since the last run" on purpose: Garmin uploads
+    can arrive a day or more late, and ``import_health_snapshot`` fills nulls
+    on re-fetch, so re-asking for a day we already have can only improve it.
+    """
+    if days is None:
+        days = get_settings().scheduler_sync_lookback_days
+
     source = GarminSource()
     if not await source.authenticate():
         raise RuntimeError("Garmin authentication failed")
 
     async with async_session() as session:
         since = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        since = since - timedelta(days=2)
+        since = since - timedelta(days=days)
         result = await source.fetch_and_import(session, USER_ID, since=since)
         merge_result = await merge_garmin_hevy(session, USER_ID)
         await session.commit()
@@ -223,6 +230,7 @@ async def _garmin_sync() -> None:
             result.activities_created,
             merge_result.merged,
         )
+        return result
 
 
 def job_daily_briefing() -> None:

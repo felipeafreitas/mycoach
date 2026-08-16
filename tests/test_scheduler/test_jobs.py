@@ -1,7 +1,7 @@
 """Tests for scheduler job functions."""
 
 import logging
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -57,6 +57,49 @@ async def test_garmin_sync_success(mock_session: AsyncMock) -> None:
     mock_source.authenticate.assert_awaited_once()
     mock_source.fetch_and_import.assert_awaited_once()
     mock_session.commit.assert_awaited_once()
+
+
+async def test_garmin_sync_looks_back_seven_days_by_default(
+    mock_session: AsyncMock,
+) -> None:
+    """A late Garmin upload must still be recoverable days later."""
+    mock_source = MagicMock()
+    mock_source.authenticate = AsyncMock(return_value=True)
+    mock_result = MagicMock()
+    mock_result.health_snapshots_created = 0
+    mock_result.activities_created = 0
+    mock_source.fetch_and_import = AsyncMock(return_value=mock_result)
+    mock_merge = MagicMock(merged=0)
+
+    with (
+        patch("mycoach.scheduler.jobs.GarminSource", return_value=mock_source),
+        patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch("mycoach.scheduler.jobs.merge_garmin_hevy", AsyncMock(return_value=mock_merge)),
+    ):
+        await _garmin_sync()
+
+    since = mock_source.fetch_and_import.await_args.kwargs["since"]
+    assert (datetime.utcnow().date() - since.date()).days == 7
+
+
+async def test_garmin_sync_returns_the_import_result(mock_session: AsyncMock) -> None:
+    """The briefing job needs the result to decide whether to skip."""
+    mock_source = MagicMock()
+    mock_source.authenticate = AsyncMock(return_value=True)
+    mock_result = MagicMock()
+    mock_result.health_snapshots_created = 1
+    mock_result.activities_created = 0
+    mock_source.fetch_and_import = AsyncMock(return_value=mock_result)
+    mock_merge = MagicMock(merged=0)
+
+    with (
+        patch("mycoach.scheduler.jobs.GarminSource", return_value=mock_source),
+        patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch("mycoach.scheduler.jobs.merge_garmin_hevy", AsyncMock(return_value=mock_merge)),
+    ):
+        result = await _garmin_sync()
+
+    assert result is mock_result
 
 
 async def test_garmin_sync_auth_failure_raises(mock_session: AsyncMock) -> None:
