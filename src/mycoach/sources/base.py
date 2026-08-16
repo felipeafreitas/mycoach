@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,7 @@ class ImportResult:
     activities_skipped: int = 0
     health_snapshots_created: int = 0
     health_snapshots_updated: int = 0
+    empty_health_days: list[date] = field(default_factory=list)
     errors: list[str] | None = None
 
     @property

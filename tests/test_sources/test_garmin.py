@@ -631,6 +631,67 @@ class TestGarminSource:
             assert result.errors is not None
             assert any("no usable Garmin health data" in e for e in result.errors)
 
+    async def test_empty_days_exposed_as_structured_dates(self, setup_db) -> None:  # type: ignore[no-untyped-def]
+        """Callers must be able to ask 'was this day empty?' without parsing prose."""
+        from tests.conftest import test_session
+
+        mock_client = MagicMock()
+        mock_client.get_stats.return_value = {"calendarDate": "2026-08-14"}
+        mock_client.get_sleep_data.return_value = {}
+        mock_client.get_hrv_data.return_value = {}
+        mock_client.get_stress_data.return_value = {}
+        mock_client.get_body_battery.return_value = []
+        mock_client.get_training_readiness.return_value = {}
+        mock_client.get_training_status.return_value = {}
+        mock_client.get_max_metrics.return_value = []
+        mock_client.get_respiration_data.return_value = {}
+        mock_client.get_spo2_data.return_value = {}
+        mock_client.get_activities_by_date.return_value = []
+
+        source = GarminSource(client=mock_client)
+
+        async with test_session() as session:
+            user = await _create_user(session)
+            await session.commit()
+
+            result = await source.fetch_and_import(
+                session, user.id, since=datetime(2026, 8, 14)
+            )
+
+            assert date(2026, 8, 14) in result.empty_health_days
+
+    async def test_api_exception_reported_separately_from_emptiness(self, setup_db) -> None:  # type: ignore[no-untyped-def]
+        """A crashed endpoint must not masquerade as a day with no data."""
+        from tests.conftest import test_session
+
+        mock_client = MagicMock()
+        mock_client.get_stats.return_value = SAMPLE_STATS
+        mock_client.get_sleep_data.side_effect = RuntimeError("401 Unauthorized")
+        mock_client.get_hrv_data.return_value = SAMPLE_HRV
+        mock_client.get_stress_data.return_value = SAMPLE_STRESS
+        mock_client.get_body_battery.return_value = SAMPLE_BODY_BATTERY
+        mock_client.get_training_readiness.return_value = SAMPLE_TRAINING_READINESS
+        mock_client.get_training_status.return_value = SAMPLE_TRAINING_STATUS
+        mock_client.get_max_metrics.return_value = SAMPLE_MAX_METRICS
+        mock_client.get_respiration_data.return_value = SAMPLE_RESPIRATION
+        mock_client.get_spo2_data.return_value = SAMPLE_SPO2
+        mock_client.get_activities_by_date.return_value = []
+
+        source = GarminSource(client=mock_client)
+
+        async with test_session() as session:
+            user = await _create_user(session)
+            await session.commit()
+
+            result = await source.fetch_and_import(
+                session, user.id, since=datetime(2026, 8, 14)
+            )
+
+            assert result.errors is not None
+            assert any("get_sleep_data" in e for e in result.errors)
+            # The day still had other content, so it is not an "empty" day.
+            assert result.empty_health_days == []
+
 
 # ── API Endpoint Tests ───────────────────────────────────────────────
 

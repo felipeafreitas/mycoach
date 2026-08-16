@@ -59,13 +59,16 @@ class GarminSource(DataSource):
             start_date = end_date - timedelta(days=7)
 
         # Fetch health snapshots day by day
-        empty_health_days: list[date] = []
         current = start_date
         while current <= end_date:
             try:
-                snapshot, has_data = self._fetch_health_for_day(user_id, current)
+                snapshot, has_data, failures = self._fetch_health_for_day(user_id, current)
                 if not has_data:
-                    empty_health_days.append(current)
+                    result.empty_health_days.append(current)
+                if failures:
+                    errors.append(
+                        f"Garmin API calls failed for {current}: {', '.join(failures)}"
+                    )
                 created = await import_health_snapshot(session, snapshot)
                 if created:
                     result.health_snapshots_created += 1
@@ -77,10 +80,10 @@ class GarminSource(DataSource):
                 logger.warning("Health fetch failed for %s: %s", current, e)
             current += timedelta(days=1)
 
-        if empty_health_days:
+        if result.empty_health_days:
             errors.append(
-                f"{len(empty_health_days)} day(s) synced with no usable Garmin health data: "
-                f"{', '.join(str(d) for d in empty_health_days)}"
+                f"{len(result.empty_health_days)} day(s) synced with no usable Garmin "
+                f"health data: {', '.join(str(d) for d in result.empty_health_days)}"
             )
 
         # Fetch activities for the date range
@@ -102,22 +105,35 @@ class GarminSource(DataSource):
             result.errors = errors
         return result
 
-    def _fetch_health_for_day(self, user_id: int, day: date) -> tuple[DailyHealthSnapshot, bool]:
+    def _fetch_health_for_day(
+        self, user_id: int, day: date
+    ) -> tuple[DailyHealthSnapshot, bool, list[str]]:
         """Fetch all health data for a single day and build a snapshot.
 
         Each API call is wrapped individually so partial data is still captured.
+        Returns the snapshot, whether it carries usable content, and the names
+        of any Garmin calls that raised.
         """
-        raw_stats = self._safe_call(self._client.get_stats, day)
+        failures: list[str] = []
+        raw_stats = self._safe_call(self._client.get_stats, day, failures=failures)
         stats = raw_stats if isinstance(raw_stats, dict) else {}
-        sleep = self._safe_call(self._client.get_sleep_data, day)
-        hrv = self._safe_call(self._client.get_hrv_data, day)
-        stress = self._safe_call(self._client.get_stress_data, day)
-        body_battery = self._safe_call(self._client.get_body_battery, day, day)
-        training_readiness = self._safe_call(self._client.get_training_readiness, day)
-        training_status = self._safe_call(self._client.get_training_status, day)
-        max_metrics = self._safe_call(self._client.get_max_metrics, day)
-        respiration = self._safe_call(self._client.get_respiration_data, day)
-        spo2 = self._safe_call(self._client.get_spo2_data, day)
+        sleep = self._safe_call(self._client.get_sleep_data, day, failures=failures)
+        hrv = self._safe_call(self._client.get_hrv_data, day, failures=failures)
+        stress = self._safe_call(self._client.get_stress_data, day, failures=failures)
+        body_battery = self._safe_call(
+            self._client.get_body_battery, day, day, failures=failures
+        )
+        training_readiness = self._safe_call(
+            self._client.get_training_readiness, day, failures=failures
+        )
+        training_status = self._safe_call(
+            self._client.get_training_status, day, failures=failures
+        )
+        max_metrics = self._safe_call(self._client.get_max_metrics, day, failures=failures)
+        respiration = self._safe_call(
+            self._client.get_respiration_data, day, failures=failures
+        )
+        spo2 = self._safe_call(self._client.get_spo2_data, day, failures=failures)
 
         snapshot = map_health_snapshot(
             user_id=user_id,
@@ -143,13 +159,25 @@ class GarminSource(DataSource):
             logger.warning(
                 "Garmin health fetch for %s: response carried no usable values", day
             )
-        return snapshot, has_data
+        return snapshot, has_data, failures
 
     @staticmethod
-    def _safe_call(func: Any, *args: Any) -> Any:
-        """Call a Garmin API method, returning None on failure."""
+    def _safe_call(func: Any, *args: Any, failures: list[str] | None = None) -> Any:
+        """Call a Garmin API method, returning None on failure.
+
+        The failure is also appended to ``failures`` when one is given, because
+        a returned ``None`` alone cannot be told apart from an endpoint that
+        legitimately had nothing to report — and treating a crash as an empty
+        day is how a broken sync stays invisible.
+        """
         try:
             return func(*args)
         except Exception as e:
-            logger.warning("Garmin API call %s failed: %s", func.__name__, e)
+            # getattr, not func.__name__: unittest.mock test doubles don't carry
+            # __name__ unless explicitly configured, and a call that fails to
+            # even be named must not be swallowed for that reason.
+            name = getattr(func, "__name__", repr(func))
+            logger.warning("Garmin API call %s failed: %s", name, e)
+            if failures is not None:
+                failures.append(name)
             return None
