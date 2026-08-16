@@ -35,6 +35,10 @@ async def test_daily_briefing_sends_email(mock_session: AsyncMock, mock_insight:
     mock_engine.generate_daily_briefing = AsyncMock(return_value=mock_insight)
 
     with (
+        patch(
+            "mycoach.scheduler.jobs._garmin_sync",
+            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+        ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
         patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
         patch("mycoach.scheduler.jobs._get_user_email_pref", AsyncMock(return_value=True)),
@@ -52,6 +56,10 @@ async def test_daily_briefing_skips_email_when_disabled(
     mock_engine.generate_daily_briefing = AsyncMock(return_value=mock_insight)
 
     with (
+        patch(
+            "mycoach.scheduler.jobs._garmin_sync",
+            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+        ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
         patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
         patch("mycoach.scheduler.jobs._get_user_email_pref", AsyncMock(return_value=False)),

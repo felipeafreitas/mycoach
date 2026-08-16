@@ -240,6 +240,32 @@ def job_daily_briefing() -> None:
 
 
 async def _daily_briefing() -> None:
+    """Sync fresh Garmin data, then generate the briefing from it.
+
+    The sync is part of the job rather than a separate cron entry because the
+    coupling is real: a briefing about last night's sleep is meaningless
+    without last night's sleep, and the standalone 06:00 sync runs before
+    Garmin has finalised it. Encoding that in the job beats spacing two crons
+    and hoping.
+    """
+    today = date.today()
+
+    # A sync failure is not a reason to withhold a briefing — yesterday's data
+    # may well be enough, and the failure is logged either way. Only a
+    # confirmed absence of today's data below stops the run.
+    empty_days: list[date] = []
+    try:
+        sync_result = await _garmin_sync()
+        empty_days = list(sync_result.empty_health_days)
+    except Exception as e:  # noqa: BLE001 - logged, and the briefing may still be viable
+        logger.warning("Scheduler: pre-briefing Garmin sync failed — %s", e)
+
+    if today in empty_days:
+        raise PipelineSkip(
+            f"Garmin returned no usable health data for {today} — skipping the "
+            f"briefing rather than inferring recovery from nothing"
+        )
+
     engine = CoachingEngine()
     async with async_session() as session:
         insight = await engine.generate_daily_briefing(session, USER_ID)
