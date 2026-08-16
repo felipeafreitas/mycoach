@@ -1,8 +1,10 @@
 """Tests for Garmin source: mappers, source orchestration, and sync endpoint."""
 
+import logging
 from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy import select
 
 from mycoach.models.activity import Activity
@@ -13,6 +15,7 @@ from mycoach.sources.garmin.mappers import (
     import_health_snapshot,
     map_activity,
     map_health_snapshot,
+    snapshot_has_data,
 )
 from mycoach.sources.garmin.source import GarminSource
 
@@ -540,6 +543,42 @@ class TestGarminSource:
             assert result.errors is not None
             assert any("no usable Garmin health data" in e for e in result.errors)
 
+    def test_partial_day_logs_which_content_fields_are_null(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A day with some fields but no sleep must log which content came back null.
+
+        The old per-field ``field_status`` INFO log was deleted along with its
+        misleading ``isinstance`` checks, but a *partially*-populated day now
+        logs nothing at all: ``has_data`` is True so the empty-day WARNING never
+        fires, and nothing raised so nothing lands in ``errors``. That silent
+        partial shape is exactly the 13/08 symptom the spec opens with.
+        """
+        mock_client = MagicMock()
+        mock_client.get_stats.return_value = SAMPLE_STATS
+        mock_client.get_sleep_data.return_value = None
+        mock_client.get_hrv_data.return_value = None
+        mock_client.get_stress_data.return_value = None
+        mock_client.get_body_battery.return_value = None
+        mock_client.get_training_readiness.return_value = None
+        mock_client.get_training_status.return_value = None
+        mock_client.get_max_metrics.return_value = None
+        mock_client.get_respiration_data.return_value = None
+        mock_client.get_spo2_data.return_value = None
+
+        source = GarminSource(client=mock_client)
+
+        with caplog.at_level(logging.INFO):
+            _, has_data, failures = source._fetch_health_for_day(1, date(2026, 8, 13))
+
+        assert has_data is True
+        assert failures == []
+        info_logs = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert any(
+            "sleep_duration_minutes" in r.message and "partial data" in r.message
+            for r in info_logs
+        )
+
     async def test_auth_failure(self, setup_db) -> None:  # type: ignore[no-untyped-def]
         mock_client = MagicMock()
         mock_client.connect.return_value = False
@@ -600,6 +639,97 @@ class TestGarminSource:
             assert result.activities_created == 1
             assert any("Health fetch failed" in e for e in (result.errors or []))
 
+    async def test_null_skeleton_day_is_flagged_as_empty(self, setup_db) -> None:  # type: ignore[no-untyped-def]
+        """A dict-shaped but all-null Garmin response must count as no data."""
+        from tests.conftest import test_session
+
+        mock_client = MagicMock()
+        mock_client.get_stats.return_value = {"calendarDate": "2026-08-14"}
+        mock_client.get_sleep_data.return_value = {"dailySleepDTO": {}}
+        mock_client.get_hrv_data.return_value = {"hrvSummary": {}}
+        mock_client.get_stress_data.return_value = {}
+        mock_client.get_body_battery.return_value = []
+        mock_client.get_training_readiness.return_value = {}
+        mock_client.get_training_status.return_value = {}
+        mock_client.get_max_metrics.return_value = []
+        mock_client.get_respiration_data.return_value = {}
+        mock_client.get_spo2_data.return_value = {}
+        mock_client.get_activities_by_date.return_value = []
+
+        source = GarminSource(client=mock_client)
+
+        async with test_session() as session:
+            user = await _create_user(session)
+            await session.commit()
+
+            result = await source.fetch_and_import(
+                session, user.id, since=datetime(2026, 8, 14)
+            )
+
+            assert result.errors is not None
+            assert any("no usable Garmin health data" in e for e in result.errors)
+
+    async def test_empty_days_exposed_as_structured_dates(self, setup_db) -> None:  # type: ignore[no-untyped-def]
+        """Callers must be able to ask 'was this day empty?' without parsing prose."""
+        from tests.conftest import test_session
+
+        mock_client = MagicMock()
+        mock_client.get_stats.return_value = {"calendarDate": "2026-08-14"}
+        mock_client.get_sleep_data.return_value = {}
+        mock_client.get_hrv_data.return_value = {}
+        mock_client.get_stress_data.return_value = {}
+        mock_client.get_body_battery.return_value = []
+        mock_client.get_training_readiness.return_value = {}
+        mock_client.get_training_status.return_value = {}
+        mock_client.get_max_metrics.return_value = []
+        mock_client.get_respiration_data.return_value = {}
+        mock_client.get_spo2_data.return_value = {}
+        mock_client.get_activities_by_date.return_value = []
+
+        source = GarminSource(client=mock_client)
+
+        async with test_session() as session:
+            user = await _create_user(session)
+            await session.commit()
+
+            result = await source.fetch_and_import(
+                session, user.id, since=datetime(2026, 8, 14)
+            )
+
+            assert date(2026, 8, 14) in result.empty_health_days
+
+    async def test_api_exception_reported_separately_from_emptiness(self, setup_db) -> None:  # type: ignore[no-untyped-def]
+        """A crashed endpoint must not masquerade as a day with no data."""
+        from tests.conftest import test_session
+
+        mock_client = MagicMock()
+        mock_client.get_stats.return_value = SAMPLE_STATS
+        mock_client.get_sleep_data.side_effect = RuntimeError("401 Unauthorized")
+        mock_client.get_hrv_data.return_value = SAMPLE_HRV
+        mock_client.get_stress_data.return_value = SAMPLE_STRESS
+        mock_client.get_body_battery.return_value = SAMPLE_BODY_BATTERY
+        mock_client.get_training_readiness.return_value = SAMPLE_TRAINING_READINESS
+        mock_client.get_training_status.return_value = SAMPLE_TRAINING_STATUS
+        mock_client.get_max_metrics.return_value = SAMPLE_MAX_METRICS
+        mock_client.get_respiration_data.return_value = SAMPLE_RESPIRATION
+        mock_client.get_spo2_data.return_value = SAMPLE_SPO2
+        mock_client.get_activities_by_date.return_value = []
+
+        source = GarminSource(client=mock_client)
+
+        async with test_session() as session:
+            user = await _create_user(session)
+            await session.commit()
+
+            result = await source.fetch_and_import(
+                session, user.id, since=datetime(2026, 8, 14)
+            )
+
+            assert result.errors is not None
+            assert any("get_sleep_data" in e for e in result.errors)
+            # The day still had other content, so it is not an "empty" day.
+            assert result.empty_health_days == []
+
 
 # ── API Endpoint Tests ───────────────────────────────────────────────
 
@@ -656,3 +786,62 @@ class TestSyncGarminEndpoint:
 
         resp = await client.post("/api/sources/sync/garmin?days=14")
         assert resp.status_code == 200
+
+
+class TestSnapshotHasData:
+    def test_all_null_skeleton_has_no_data(self) -> None:
+        """Garmin's empty-day response is a valid dict of nulls — not data."""
+        skeleton = {
+            "restingHeartRate": None,
+            "maxHeartRate": None,
+            "totalSteps": None,
+            "calendarDate": "2026-08-14",
+        }
+        snapshot = map_health_snapshot(
+            user_id=1,
+            snapshot_date=date(2026, 8, 14),
+            stats=skeleton,
+            sleep={"dailySleepDTO": {}},
+            hrv={"hrvSummary": {}},
+        )
+        assert snapshot_has_data(snapshot) is False
+
+    def test_populated_snapshot_has_data(self) -> None:
+        snapshot = map_health_snapshot(
+            user_id=1,
+            snapshot_date=date(2026, 8, 13),
+            stats=SAMPLE_STATS,
+            sleep=SAMPLE_SLEEP,
+        )
+        assert snapshot_has_data(snapshot) is True
+
+    def test_raw_data_alone_is_not_data(self) -> None:
+        """raw_data is always set, so it must not count as content."""
+        snapshot = map_health_snapshot(
+            user_id=1,
+            snapshot_date=date(2026, 8, 14),
+            stats={"calendarDate": "2026-08-14"},
+        )
+        assert snapshot.raw_data is not None
+        assert snapshot_has_data(snapshot) is False
+
+    def test_zero_valued_metric_counts_as_data(self) -> None:
+        """A zero is a real reading, not Garmin's null skeleton.
+
+        ``_safe_int(0)`` returns ``0``, not ``None``, so a snapshot whose only
+        non-null value is a zero-valued metric (e.g. a genuine 0-step rest day)
+        is treated as data. This is the intended behaviour: Garmin's actual
+        empty-day payload is all-null, never a zero — a zero means Garmin
+        answered with a real, if uneventful, value. Treating it as "no data"
+        would wrongly skip a briefing for a day Garmin did answer. If Garmin
+        ever sends a zero to *mean* "no reading" this pins the fact that
+        ``snapshot_has_data`` would score it as data anyway, so a future fix
+        for that must touch this test.
+        """
+        snapshot = map_health_snapshot(
+            user_id=1,
+            snapshot_date=date(2026, 8, 14),
+            stats={"totalSteps": 0},
+        )
+        assert snapshot.steps == 0
+        assert snapshot_has_data(snapshot) is True

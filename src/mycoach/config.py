@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     scheduler_timezone: str = ""
     scheduler_sync_hour: int = 6
     scheduler_sync_minute: int = 0
+    # Garmin uploads can land a day or more after the fact, so each sync
+    # re-fetches a window rather than only the newest days. import_health_snapshot
+    # fills nulls on re-fetch, so a wider window is pure recovery.
+    scheduler_sync_lookback_days: int = 7
     scheduler_briefing_hour: int = 9
     scheduler_briefing_minute: int = 30
     scheduler_post_workout_hour: int = 7

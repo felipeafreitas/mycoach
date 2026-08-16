@@ -189,6 +189,10 @@ class TestRequestLoggingMiddleware:
             resp = await client.get("/api/health/today")
         # 404 expected (no health data)
         assert resp.status_code == 404
-        matching = [r for r in caplog.records if "/api/health/today" in r.message]
+        matching = [
+            r
+            for r in caplog.records
+            if r.name == "mycoach.access" and "/api/health/today" in r.message
+        ]
         assert len(matching) == 1
         assert "404" in matching[0].message

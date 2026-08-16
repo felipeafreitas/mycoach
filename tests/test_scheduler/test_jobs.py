@@ -1,7 +1,7 @@
 """Tests for scheduler job functions."""
 
 import logging
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -59,6 +59,49 @@ async def test_garmin_sync_success(mock_session: AsyncMock) -> None:
     mock_session.commit.assert_awaited_once()
 
 
+async def test_garmin_sync_looks_back_seven_days_by_default(
+    mock_session: AsyncMock,
+) -> None:
+    """A late Garmin upload must still be recoverable days later."""
+    mock_source = MagicMock()
+    mock_source.authenticate = AsyncMock(return_value=True)
+    mock_result = MagicMock()
+    mock_result.health_snapshots_created = 0
+    mock_result.activities_created = 0
+    mock_source.fetch_and_import = AsyncMock(return_value=mock_result)
+    mock_merge = MagicMock(merged=0)
+
+    with (
+        patch("mycoach.scheduler.jobs.GarminSource", return_value=mock_source),
+        patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch("mycoach.scheduler.jobs.merge_garmin_hevy", AsyncMock(return_value=mock_merge)),
+    ):
+        await _garmin_sync()
+
+    since = mock_source.fetch_and_import.await_args.kwargs["since"]
+    assert (datetime.utcnow().date() - since.date()).days == 7
+
+
+async def test_garmin_sync_returns_the_import_result(mock_session: AsyncMock) -> None:
+    """The briefing job needs the result to decide whether to skip."""
+    mock_source = MagicMock()
+    mock_source.authenticate = AsyncMock(return_value=True)
+    mock_result = MagicMock()
+    mock_result.health_snapshots_created = 1
+    mock_result.activities_created = 0
+    mock_source.fetch_and_import = AsyncMock(return_value=mock_result)
+    mock_merge = MagicMock(merged=0)
+
+    with (
+        patch("mycoach.scheduler.jobs.GarminSource", return_value=mock_source),
+        patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch("mycoach.scheduler.jobs.merge_garmin_hevy", AsyncMock(return_value=mock_merge)),
+    ):
+        result = await _garmin_sync()
+
+    assert result is mock_result
+
+
 async def test_garmin_sync_auth_failure_raises(mock_session: AsyncMock) -> None:
     """Garmin auth failure should raise rather than return silently."""
     mock_source = MagicMock()
@@ -98,12 +141,190 @@ def test_garmin_sync_job_logs_auth_failure(
 async def test_daily_briefing_success(mock_session: AsyncMock, mock_engine: MagicMock) -> None:
     """Daily briefing job should call the coaching engine."""
     with (
+        patch(
+            "mycoach.scheduler.jobs._garmin_sync",
+            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+        ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
         patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch(
+            "mycoach.scheduler.jobs.get_today_health",
+            AsyncMock(return_value={"sleep_score": 80}),
+        ),
     ):
         await _daily_briefing()
 
     mock_engine.generate_daily_briefing.assert_awaited_once()
+
+
+async def test_daily_briefing_syncs_before_generating(
+    mock_session: AsyncMock, mock_engine: MagicMock
+) -> None:
+    """The briefing must fetch fresh data, not read a snapshot hours old."""
+    calls: list[str] = []
+
+    async def fake_sync(days: int | None = None) -> MagicMock:
+        calls.append("sync")
+        return MagicMock(empty_health_days=[])
+
+    async def fake_generate(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append("generate")
+        return MagicMock(content='{"readiness_verdict": "go_hard"}')
+
+    mock_engine.generate_daily_briefing = AsyncMock(side_effect=fake_generate)
+
+    with (
+        patch("mycoach.scheduler.jobs._garmin_sync", fake_sync),
+        patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
+        patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch("mycoach.scheduler.jobs._get_user_email_pref", AsyncMock(return_value=False)),
+        patch(
+            "mycoach.scheduler.jobs.get_today_health",
+            AsyncMock(return_value={"sleep_score": 80}),
+        ),
+    ):
+        await _daily_briefing()
+
+    assert calls == ["sync", "generate"]
+
+
+async def test_daily_briefing_skips_when_today_has_no_health_data(
+    mock_session: AsyncMock, mock_engine: MagicMock
+) -> None:
+    """No data is a skip with a reason — never a briefing invented from nothing."""
+    today = date.today()
+
+    async def fake_sync(days: int | None = None) -> MagicMock:
+        return MagicMock(empty_health_days=[today])
+
+    with (
+        patch("mycoach.scheduler.jobs._garmin_sync", fake_sync),
+        patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
+        patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        pytest.raises(PipelineSkip, match="no usable health data"),
+    ):
+        await _daily_briefing()
+
+    mock_engine.generate_daily_briefing.assert_not_awaited()
+
+
+async def test_daily_briefing_proceeds_when_sync_fails(
+    mock_session: AsyncMock, mock_engine: MagicMock
+) -> None:
+    """A sync failure must not block a briefing when the DB already has data."""
+
+    async def failing_sync(days: int | None = None) -> MagicMock:
+        raise RuntimeError("Garmin authentication failed")
+
+    mock_engine.generate_daily_briefing = AsyncMock(
+        return_value=MagicMock(content='{"readiness_verdict": "moderate"}')
+    )
+
+    with (
+        patch("mycoach.scheduler.jobs._garmin_sync", failing_sync),
+        patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
+        patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch("mycoach.scheduler.jobs._get_user_email_pref", AsyncMock(return_value=False)),
+        patch(
+            "mycoach.scheduler.jobs.get_today_health",
+            AsyncMock(return_value={"sleep_score": 80}),
+        ),
+    ):
+        await _daily_briefing()
+
+    mock_engine.generate_daily_briefing.assert_awaited_once()
+
+
+async def test_daily_briefing_sync_failure_logged_at_error_level(
+    mock_session: AsyncMock, mock_engine: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A sync failure inside the briefing must not vanish into a WARNING nobody reads.
+
+    R7 says the briefing proceeds regardless — that is pinned by
+    ``test_daily_briefing_proceeds_when_sync_fails`` above and must not change here.
+    This only pins that the failure is loud enough that a 'success' job_runs row
+    is not the only trace of it.
+    """
+
+    async def failing_sync(days: int | None = None) -> MagicMock:
+        raise RuntimeError("Garmin authentication failed")
+
+    mock_engine.generate_daily_briefing = AsyncMock(
+        return_value=MagicMock(content='{"readiness_verdict": "moderate"}')
+    )
+
+    with (
+        patch("mycoach.scheduler.jobs._garmin_sync", failing_sync),
+        patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
+        patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch("mycoach.scheduler.jobs._get_user_email_pref", AsyncMock(return_value=False)),
+        patch(
+            "mycoach.scheduler.jobs.get_today_health",
+            AsyncMock(return_value={"sleep_score": 80}),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        await _daily_briefing()
+
+    assert any(
+        r.levelno == logging.ERROR and "pre-briefing Garmin sync failed" in r.message
+        for r in caplog.records
+    )
+
+
+async def test_daily_briefing_warns_when_no_recovery_data(
+    mock_session: AsyncMock, mock_engine: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A snapshot with some content but no sleep/HRV/Body Battery must not pass silently.
+
+    The skip guard is deliberately narrow (only a fully empty day skips), so a
+    thin day like this proceeds to generate a briefing — but it must log loudly
+    that it did so without any recovery data.
+    """
+    with (
+        patch(
+            "mycoach.scheduler.jobs._garmin_sync",
+            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+        ),
+        patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
+        patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch("mycoach.scheduler.jobs._get_user_email_pref", AsyncMock(return_value=False)),
+        patch(
+            "mycoach.scheduler.jobs.get_today_health",
+            AsyncMock(return_value={"resting_hr": 58, "steps": 10234}),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        await _daily_briefing()
+
+    assert any(
+        r.levelno == logging.WARNING and "without any recovery data" in r.message
+        for r in caplog.records
+    )
+    mock_engine.generate_daily_briefing.assert_awaited_once()
+
+
+async def test_daily_briefing_no_warning_when_sleep_data_present(
+    mock_session: AsyncMock, mock_engine: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The no-recovery-data warning must not fire when sleep data is present."""
+    with (
+        patch(
+            "mycoach.scheduler.jobs._garmin_sync",
+            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+        ),
+        patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
+        patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch("mycoach.scheduler.jobs._get_user_email_pref", AsyncMock(return_value=False)),
+        patch(
+            "mycoach.scheduler.jobs.get_today_health",
+            AsyncMock(return_value={"resting_hr": 58, "sleep_score": 80}),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        await _daily_briefing()
+
+    assert not any("without any recovery data" in r.message for r in caplog.records)
 
 
 async def test_daily_briefing_raises_skip_on_duplicate(
@@ -115,8 +336,16 @@ async def test_daily_briefing_raises_skip_on_duplicate(
     )
 
     with (
+        patch(
+            "mycoach.scheduler.jobs._garmin_sync",
+            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+        ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
         patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch(
+            "mycoach.scheduler.jobs.get_today_health",
+            AsyncMock(return_value={"sleep_score": 80}),
+        ),
         pytest.raises(PipelineSkip),
     ):
         await _daily_briefing()
@@ -131,8 +360,16 @@ def test_daily_briefing_job_logs_skip(
     )
 
     with (
+        patch(
+            "mycoach.scheduler.jobs._garmin_sync",
+            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+        ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
         patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
+        patch(
+            "mycoach.scheduler.jobs.get_today_health",
+            AsyncMock(return_value={"sleep_score": 80}),
+        ),
         caplog.at_level(logging.INFO),
     ):
         job_daily_briefing()  # must not raise
@@ -157,9 +394,17 @@ def test_daily_briefing_job_logs_malformed_response_as_failure(
     mock_engine.generate_daily_briefing = AsyncMock(return_value=mock_insight)
 
     with (
+        patch(
+            "mycoach.scheduler.jobs._garmin_sync",
+            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+        ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
         patch("mycoach.scheduler.jobs.async_session", return_value=mock_session),
         patch("mycoach.scheduler.jobs._get_user_email_pref", AsyncMock(return_value=True)),
+        patch(
+            "mycoach.scheduler.jobs.get_today_health",
+            AsyncMock(return_value={"sleep_score": 80}),
+        ),
         caplog.at_level(logging.INFO),
     ):
         job_daily_briefing()  # must not raise

@@ -17,6 +17,7 @@ from functools import partial
 
 from sqlalchemy import select
 
+from mycoach.coaching.context import get_today_health
 from mycoach.coaching.engine import CoachingEngine
 from mycoach.coaching.exceptions import NoAvailabilityConfigured, PipelineSkip
 from mycoach.config import get_settings
@@ -34,6 +35,7 @@ from mycoach.models.coaching import CoachingInsight
 from mycoach.models.job_run import JobRun
 from mycoach.models.plan import PlannedSession
 from mycoach.models.user import User
+from mycoach.sources.base import ImportResult
 from mycoach.sources.garmin.source import GarminSource
 from mycoach.sources.merger import merge_garmin_hevy
 
@@ -42,6 +44,20 @@ logger = logging.getLogger(__name__)
 USER_ID = 1  # Single-user MVP
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+# The fields that make a briefing about recovery rather than about nothing —
+# sleep, HRV, and Body Battery. A snapshot can pass the empty-day guard (it has
+# *some* content, e.g. resting HR and steps) while carrying none of these, which
+# is exactly the 13/08 symptom the spec opens with. Named here so the intent
+# behind the check below is legible, not a bare inline tuple.
+_RECOVERY_FIELDS = (
+    "sleep_duration_minutes",
+    "sleep_score",
+    "hrv_status",
+    "hrv_7day_avg",
+    "hrv_status_text",
+    "body_battery_morning",
+)
 
 
 def _run_async(coro):  # type: ignore[no-untyped-def]
@@ -198,22 +214,28 @@ async def _get_user_email_pref(pref_field: str) -> bool:
 
 
 def job_garmin_sync() -> None:
-    """Sync health and activity data from Garmin Connect.
-
-    Fetches the last 2 days of data to handle timezone edge cases and overnight sync.
-    """
+    """Sync health and activity data from Garmin Connect."""
     logger.info("Scheduler: starting Garmin sync")
     _run_recorded_job("garmin_sync", _garmin_sync())
 
 
-async def _garmin_sync() -> None:
+async def _garmin_sync(days: int | None = None) -> ImportResult:
+    """Fetch and import a window of Garmin data, returning what was imported.
+
+    The window is wider than "since the last run" on purpose: Garmin uploads
+    can arrive a day or more late, and ``import_health_snapshot`` fills nulls
+    on re-fetch, so re-asking for a day we already have can only improve it.
+    """
+    if days is None:
+        days = get_settings().scheduler_sync_lookback_days
+
     source = GarminSource()
     if not await source.authenticate():
         raise RuntimeError("Garmin authentication failed")
 
     async with async_session() as session:
         since = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        since = since - timedelta(days=2)
+        since = since - timedelta(days=days)
         result = await source.fetch_and_import(session, USER_ID, since=since)
         merge_result = await merge_garmin_hevy(session, USER_ID)
         await session.commit()
@@ -223,6 +245,7 @@ async def _garmin_sync() -> None:
             result.activities_created,
             merge_result.merged,
         )
+        return result
 
 
 def job_daily_briefing() -> None:
@@ -232,8 +255,45 @@ def job_daily_briefing() -> None:
 
 
 async def _daily_briefing() -> None:
+    """Sync fresh Garmin data, then generate the briefing from it.
+
+    The sync is part of the job rather than a separate cron entry because the
+    coupling is real: a briefing about last night's sleep is meaningless
+    without last night's sleep, and the standalone 06:00 sync runs before
+    Garmin has finalised it. Encoding that in the job beats spacing two crons
+    and hoping.
+    """
+    today = date.today()
+
+    # A sync failure is not a reason to withhold a briefing — yesterday's data
+    # may well be enough, and the failure is logged either way. Only a
+    # confirmed absence of today's data below stops the run.
+    empty_days: list[date] = []
+    try:
+        sync_result = await _garmin_sync()
+        empty_days = list(sync_result.empty_health_days)
+    except Exception as e:  # logged, and the briefing may still be viable
+        logger.error("Scheduler: pre-briefing Garmin sync failed — %s", e)
+
+    if today in empty_days:
+        raise PipelineSkip(
+            f"Garmin returned no usable health data for {today} — skipping the "
+            f"briefing rather than inferring recovery from nothing"
+        )
+
     engine = CoachingEngine()
     async with async_session() as session:
+        # A day can carry some content (e.g. resting HR, steps) yet none of the
+        # fields the briefing exists to speak to. That is not "no data" — the
+        # skip above is deliberately narrow — but it must not pass silently.
+        today_health = await get_today_health(session, USER_ID, today)
+        if not any(field in today_health for field in _RECOVERY_FIELDS):
+            logger.warning(
+                "Scheduler: generating daily briefing for %s without any recovery "
+                "data (no sleep, HRV, or Body Battery)",
+                today,
+            )
+
         insight = await engine.generate_daily_briefing(session, USER_ID)
         logger.info("Scheduler: daily briefing generated")
 

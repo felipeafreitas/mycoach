@@ -2,7 +2,9 @@
 
 The scheduler runs five jobs as part of the daily coaching pipeline:
 1. Garmin sync (default 6:00 AM) — fetch health + activity data
-2. Daily briefing (default 6:30 AM) — LLM-generated coaching for the day
+2. Daily briefing (default 9:30 AM) — syncs Garmin first, then generates the
+   briefing from the fresh data. The standalone 6:00 AM sync runs before Garmin
+   has finalised the night's sleep, so the briefing cannot rely on it.
 3. Post-workout analysis (default 7:00 AM) — analyze new activities after sync
 4. Weekly plan (default Sunday 6:00 PM) — generate next week's training plan
 5. Weekly recap (default Monday 7:00 AM) — recap the previous week
@@ -56,7 +58,7 @@ def create_scheduler(settings: Settings) -> BackgroundScheduler:
         replace_existing=True,
     )
 
-    # 2. Daily briefing — daily, after Garmin sync
+    # 2. Daily briefing — daily; syncs Garmin itself first
     scheduler.add_job(
         job_daily_briefing,
         "cron",

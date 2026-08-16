@@ -363,6 +363,31 @@ _UPDATABLE_FIELDS = [
     "steps", "respiration_avg", "spo2_avg", "intensity_minutes", "raw_data",
 ]
 
+# raw_data is excluded: it is always written, even for Garmin's empty-day
+# skeleton, so its presence says nothing about whether the day has content.
+_CONTENT_FIELDS = [f for f in _UPDATABLE_FIELDS if f != "raw_data"]
+
+
+def snapshot_has_data(snapshot: DailyHealthSnapshot) -> bool:
+    """Does this snapshot carry any usable metric?
+
+    Garmin answers a day it has no data for with a well-formed JSON document
+    whose every metric is null. Checking the *response type* cannot tell that
+    apart from a rich day — checking the *mapped content* can.
+    """
+    return any(getattr(snapshot, field) is not None for field in _CONTENT_FIELDS)
+
+
+def snapshot_null_content_fields(snapshot: DailyHealthSnapshot) -> list[str]:
+    """Names of the content fields that came back null on this snapshot.
+
+    Same source of truth as ``snapshot_has_data`` — the mapped snapshot, not
+    the raw response shape — so a caller can log which part of a *partial*
+    day was missing without resurrecting the old per-field ``isinstance``
+    checks that lied about emptiness.
+    """
+    return [field for field in _CONTENT_FIELDS if getattr(snapshot, field) is None]
+
 
 async def import_health_snapshot(session: AsyncSession, snapshot: DailyHealthSnapshot) -> bool:
     """Import a health snapshot, or update an existing one with newer data.
