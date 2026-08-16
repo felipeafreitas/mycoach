@@ -15,6 +15,7 @@ from mycoach.sources.garmin.mappers import (
     import_activities,
     import_health_snapshot,
     map_health_snapshot,
+    snapshot_has_data,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,25 +119,6 @@ class GarminSource(DataSource):
         respiration = self._safe_call(self._client.get_respiration_data, day)
         spo2 = self._safe_call(self._client.get_spo2_data, day)
 
-        field_status = {
-            "stats": bool(stats),
-            "sleep": isinstance(sleep, dict),
-            "hrv": isinstance(hrv, dict),
-            "stress": isinstance(stress, dict),
-            "body_battery": isinstance(body_battery, list),
-            "training_readiness": isinstance(training_readiness, dict),
-            "training_status": isinstance(training_status, dict),
-            "max_metrics": bool(max_metrics),
-            "respiration": isinstance(respiration, dict),
-            "spo2": isinstance(spo2, dict),
-        }
-        if not any(field_status.values()):
-            logger.warning(
-                "Garmin health fetch for %s: no usable fields at all — %s", day, field_status
-            )
-        elif not all(field_status.values()):
-            logger.info("Garmin health fetch for %s: partial data — %s", day, field_status)
-
         snapshot = map_health_snapshot(
             user_id=user_id,
             snapshot_date=day,
@@ -151,7 +133,17 @@ class GarminSource(DataSource):
             respiration=respiration,
             spo2=spo2,
         )
-        return snapshot, any(field_status.values())
+
+        # Judge the mapped content, not the response type. Garmin answers a day
+        # it has nothing for with a well-formed document of nulls, which an
+        # isinstance() check scores as data — that is what hid two days of
+        # missing briefing data.
+        has_data = snapshot_has_data(snapshot)
+        if not has_data:
+            logger.warning(
+                "Garmin health fetch for %s: response carried no usable values", day
+            )
+        return snapshot, has_data
 
     @staticmethod
     def _safe_call(func: Any, *args: Any) -> Any:

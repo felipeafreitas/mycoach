@@ -13,6 +13,7 @@ from mycoach.sources.garmin.mappers import (
     import_health_snapshot,
     map_activity,
     map_health_snapshot,
+    snapshot_has_data,
 )
 from mycoach.sources.garmin.source import GarminSource
 
@@ -600,6 +601,36 @@ class TestGarminSource:
             assert result.activities_created == 1
             assert any("Health fetch failed" in e for e in (result.errors or []))
 
+    async def test_null_skeleton_day_is_flagged_as_empty(self, setup_db) -> None:  # type: ignore[no-untyped-def]
+        """A dict-shaped but all-null Garmin response must count as no data."""
+        from tests.conftest import test_session
+
+        mock_client = MagicMock()
+        mock_client.get_stats.return_value = {"calendarDate": "2026-08-14"}
+        mock_client.get_sleep_data.return_value = {"dailySleepDTO": {}}
+        mock_client.get_hrv_data.return_value = {"hrvSummary": {}}
+        mock_client.get_stress_data.return_value = {}
+        mock_client.get_body_battery.return_value = []
+        mock_client.get_training_readiness.return_value = {}
+        mock_client.get_training_status.return_value = {}
+        mock_client.get_max_metrics.return_value = []
+        mock_client.get_respiration_data.return_value = {}
+        mock_client.get_spo2_data.return_value = {}
+        mock_client.get_activities_by_date.return_value = []
+
+        source = GarminSource(client=mock_client)
+
+        async with test_session() as session:
+            user = await _create_user(session)
+            await session.commit()
+
+            result = await source.fetch_and_import(
+                session, user.id, since=datetime(2026, 8, 14)
+            )
+
+            assert result.errors is not None
+            assert any("no usable Garmin health data" in e for e in result.errors)
+
 
 # ── API Endpoint Tests ───────────────────────────────────────────────
 
@@ -656,3 +687,41 @@ class TestSyncGarminEndpoint:
 
         resp = await client.post("/api/sources/sync/garmin?days=14")
         assert resp.status_code == 200
+
+
+class TestSnapshotHasData:
+    def test_all_null_skeleton_has_no_data(self) -> None:
+        """Garmin's empty-day response is a valid dict of nulls — not data."""
+        skeleton = {
+            "restingHeartRate": None,
+            "maxHeartRate": None,
+            "totalSteps": None,
+            "calendarDate": "2026-08-14",
+        }
+        snapshot = map_health_snapshot(
+            user_id=1,
+            snapshot_date=date(2026, 8, 14),
+            stats=skeleton,
+            sleep={"dailySleepDTO": {}},
+            hrv={"hrvSummary": {}},
+        )
+        assert snapshot_has_data(snapshot) is False
+
+    def test_populated_snapshot_has_data(self) -> None:
+        snapshot = map_health_snapshot(
+            user_id=1,
+            snapshot_date=date(2026, 8, 13),
+            stats=SAMPLE_STATS,
+            sleep=SAMPLE_SLEEP,
+        )
+        assert snapshot_has_data(snapshot) is True
+
+    def test_raw_data_alone_is_not_data(self) -> None:
+        """raw_data is always set, so it must not count as content."""
+        snapshot = map_health_snapshot(
+            user_id=1,
+            snapshot_date=date(2026, 8, 14),
+            stats={"calendarDate": "2026-08-14"},
+        )
+        assert snapshot.raw_data is not None
+        assert snapshot_has_data(snapshot) is False
