@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from httpx import AsyncClient
 
 from mycoach.models.coaching import CoachingInsight
+from mycoach.models.health import DailyHealthSnapshot
 from mycoach.models.user import User
 from tests.conftest import test_session
 
@@ -103,6 +104,39 @@ class TestGetTodayBriefing:
 
 class TestGenerateBriefing:
     async def test_409_when_already_exists(self, client: AsyncClient) -> None:
+        await _seed_user_and_briefing()
+        resp = await client.post("/api/coaching/today/generate")
+        assert resp.status_code == 409
+
+    async def test_422_when_today_has_no_recovery_data(self, client: AsyncClient) -> None:
+        """The manual path used to bypass the guard the scheduler enforced.
+
+        422 rather than 409: nothing already exists, the request simply cannot
+        be satisfied from today's data.
+        """
+        await _seed_user()
+        resp = await client.post("/api/coaching/today/generate")
+        assert resp.status_code == 422
+
+    async def test_the_422_names_what_is_missing(self, client: AsyncClient) -> None:
+        """The dashboard shows this text verbatim, so it has to be a sentence."""
+        user_id = await _seed_user()
+        async with test_session() as session:
+            session.add(
+                DailyHealthSnapshot(
+                    user_id=user_id, snapshot_date=date.today(), resting_hr=58
+                )
+            )
+            await session.commit()
+
+        resp = await client.post("/api/coaching/today/generate")
+        assert resp.status_code == 422
+        assert "sleep, HRV, or Body Battery" in resp.json()["detail"]
+
+    async def test_an_existing_briefing_still_beats_the_data_guard(
+        self, client: AsyncClient
+    ) -> None:
+        """A day with a briefing but no snapshot is a duplicate, not a data problem."""
         await _seed_user_and_briefing()
         resp = await client.post("/api/coaching/today/generate")
         assert resp.status_code == 409

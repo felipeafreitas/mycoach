@@ -91,3 +91,50 @@ def test_scheduler_not_started() -> None:
     settings = Settings()
     scheduler = create_scheduler(settings)
     assert not scheduler.running
+
+
+def test_daily_briefing_is_registered_as_a_poll_not_a_single_shot() -> None:
+    """One 09:30 attempt loses roughly one briefing in five to upload timing alone."""
+    settings = Settings(scheduler_briefing_hour=9, scheduler_briefing_minute=30)
+    job = create_scheduler(settings).get_job("daily_briefing")
+
+    assert job is not None
+    trigger = str(job.trigger)
+    assert "*/15" in trigger
+    assert "9-20" in trigger
+
+
+def test_daily_briefing_poll_does_not_replay_stale_ticks() -> None:
+    """A poll missed while the container was down is replaced, not queued up."""
+    job = create_scheduler(Settings()).get_job("daily_briefing")
+
+    assert job is not None
+    assert job.coalesce is True
+    assert job.max_instances == 1
+    assert job.misfire_grace_time == 300
+
+
+def test_rejects_a_briefing_hour_that_could_never_generate() -> None:
+    """Between the two cutoffs the trigger is valid but never generates anything.
+
+    A silent no-op is the exact class of failure the retry window exists to
+    remove, so it fails loudly at startup instead — naming the setting.
+    """
+    import pytest
+
+    with pytest.raises(ValueError, match="MYCOACH_SCHEDULER_BRIEFING_HOUR=14"):
+        create_scheduler(Settings(scheduler_briefing_hour=14))
+
+
+def test_rejects_a_briefing_hour_past_the_evaluation_cutoff() -> None:
+    """APScheduler's own error here is an opaque note about ranges."""
+    import pytest
+
+    with pytest.raises(ValueError, match="could ever be generated"):
+        create_scheduler(Settings(scheduler_briefing_hour=21))
+
+
+def test_a_late_but_workable_briefing_hour_still_builds_a_trigger() -> None:
+    job = create_scheduler(Settings(scheduler_briefing_hour=13)).get_job("daily_briefing")
+    assert job is not None
+    assert "13-20" in str(job.trigger)

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mycoach.coaching.engine import CoachingEngine
-from mycoach.coaching.exceptions import PipelineSkip
+from mycoach.coaching.exceptions import InsufficientHealthData, PipelineSkip
 from mycoach.database import get_db
 from mycoach.models.coaching import CoachingInsight
 from mycoach.schemas.coaching import CoachingInsightRead
@@ -48,11 +48,18 @@ async def generate_today_briefing(
     """Generate today's daily coaching briefing.
 
     Gathers health + activity data, calls the LLM, and stores the result.
-    Returns 409 if a briefing already exists for today (unless force=true).
+    Returns 409 if a briefing already exists for today, and 422 if today has no
+    recovery data to brief on — both released by force=true, which is the one
+    documented way to override the guards.
     """
     engine = CoachingEngine()
     try:
         insight = await engine.generate_daily_briefing(session, USER_ID, force=force)
+    except InsufficientHealthData as e:
+        # 422, not 409: nothing already exists, the request simply cannot be
+        # satisfied from today's data. Naming what is missing is the point —
+        # the dashboard shows this text verbatim.
+        raise HTTPException(status_code=422, detail=str(e)) from None
     except (PipelineSkip, ValueError) as e:
         raise HTTPException(status_code=409, detail=str(e)) from None
     except RuntimeError as e:

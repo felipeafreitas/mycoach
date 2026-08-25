@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     scheduler_sync_lookback_days: int = 7
     scheduler_briefing_hour: int = 9
     scheduler_briefing_minute: int = 30
+    # The briefing's own pre-generation sync, which runs on every tick of the
+    # 15-minute retry poll rather than once a day. Deliberately far narrower
+    # than scheduler_sync_lookback_days above: recovering a five-day-old late
+    # upload is the 06:00 sync's job, and re-asking for it forty times a day
+    # only risks throttling the account the poll depends on.
+    scheduler_briefing_sync_lookback_days: int = 2
     scheduler_post_workout_hour: int = 7
     scheduler_post_workout_minute: int = 0
     scheduler_weekly_plan_day: str = "sun"

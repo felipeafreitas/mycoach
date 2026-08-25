@@ -56,12 +56,25 @@
         <div class="h-[5px] w-[200px] bg-white/[0.12] rounded mt-5"></div>
     </div>
     <div class="flex items-center gap-5 mt-4">
-        <p class="text-[17px] leading-relaxed text-zinc-500 max-w-[600px]">No daily briefing generated yet. Sync your Garmin data, then generate today's read.</p>
+        <p class="text-[17px] leading-relaxed text-zinc-500 max-w-[600px]">
+            {%- if briefing_banner -%}
+            {{ briefing_banner }}
+            {%- else -%}
+            No daily briefing generated yet. Sync your Garmin data, then generate today's read.
+            {%- endif -%}
+        </p>
+        {# Disabled rather than hidden: the button's absence would read as a bug,
+           its refusal reads as an explanation. The endpoint enforces the same
+           rule with a 422 regardless of what the page renders. #}
         <button id="briefing-btn" onclick="generateBriefing()"
+            {% if briefing_blocked_reason %}disabled title="{{ briefing_blocked_reason }}"{% endif %}
             class="ml-auto shrink-0 font-semibold text-[13px] text-ink bg-accent hover:bg-accent-soft transition-colors px-5 py-2.5 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
             <span id="briefing-label">Generate briefing</span>
         </button>
     </div>
+    {% if briefing_blocked_reason %}
+    <p class="mt-3 text-sm text-zinc-500 max-w-[600px]">Can't generate: {{ briefing_blocked_reason }}</p>
+    {% endif %}
     <div id="briefing-status"></div>
     {% endif %}
 

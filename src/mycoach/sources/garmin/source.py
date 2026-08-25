@@ -1,7 +1,8 @@
 """Garmin DataSource implementation — orchestrates auth, fetch, and import."""
 
 import logging
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -20,6 +21,16 @@ from mycoach.sources.garmin.mappers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DeviceUpload:
+    """When the user's watch last reached Garmin's servers, and which watch."""
+
+    uploaded_at: datetime
+    """UTC, timezone-aware."""
+
+    device_name: str | None
 
 
 class GarminSource(DataSource):
@@ -105,6 +116,36 @@ class GarminSource(DataSource):
         if errors:
             result.errors = errors
         return result
+
+    def get_last_device_upload(self) -> DeviceUpload | None:
+        """When the watch last uploaded to Garmin, or None if that is unknowable.
+
+        A day of nulls does not say whether the user simply had nothing to
+        record or whether the watch stopped syncing days ago; this does. It is
+        what turns an alert from "no briefing today" into "your watch hasn't
+        uploaded since Aug 19 at 05:20", which is the difference between a
+        message the user can act on and one they can only be annoyed by.
+
+        Returns None rather than raising: this only ever decorates an alert
+        that is already being sent, and losing the decoration must not lose
+        the alert.
+        """
+        try:
+            device = self._client.get_device_last_used()
+        except Exception as e:  # noqa: BLE001 - the alert matters more than the detail
+            logger.warning("Garmin last-used-device lookup failed: %s", e)
+            return None
+
+        if not isinstance(device, dict):
+            return None
+        raw = device.get("lastUsedDeviceUploadTime")
+        if not isinstance(raw, int | float):
+            return None
+        # Garmin reports this as epoch milliseconds.
+        return DeviceUpload(
+            uploaded_at=datetime.fromtimestamp(raw / 1000, tz=UTC),
+            device_name=device.get("lastUsedDeviceName") or None,
+        )
 
     def _fetch_health_for_day(
         self, user_id: int, day: date

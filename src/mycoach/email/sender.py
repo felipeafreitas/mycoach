@@ -6,9 +6,11 @@ Backend is selected based on configuration: Resend API key takes precedence over
 
 import logging
 import smtplib
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import resend
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -273,6 +275,96 @@ def send_no_availability(week_start: str, settings: Settings | None = None) -> b
         },
     )
     return send_email(settings.email_to, "MyCoach — No Plan Generated", html, settings)
+
+
+def _format_last_upload(uploaded_at: datetime, settings: Settings) -> str:
+    """Render a last-upload timestamp in the user's timezone, e.g. "Aug 19 at 05:20"."""
+    local = uploaded_at.astimezone(ZoneInfo(settings.timezone))
+    return local.strftime("%b %-d at %H:%M")
+
+
+def send_briefing_unavailable(
+    day: str,
+    failures: int,
+    is_broken: bool,
+    can_still_retry: bool,
+    detail: str | None = None,
+    last_upload: datetime | None = None,
+    device_name: str | None = None,
+    settings: Settings | None = None,
+) -> bool:
+    """Tell the user why there is no briefing this morning.
+
+    The wording turns entirely on ``is_broken``, because the two causes need
+    opposite things from the reader. Absent data is theirs to fix — the watch
+    uploads over Bluetooth only, so the actionable fact is when it last reached
+    Garmin at all. A broken pipeline is ours; telling someone to check their
+    Bluetooth when the real fault was a validation error in our own code is
+    worse than sending nothing, so that branch says so plainly and names the
+    error instead.
+
+    ``failures`` counts errors only, never skips. A morning of four data-less
+    skips followed by one real error is one error, and telling the reader we
+    hit five would send them looking for a fault that isn't there. The
+    data-absent branches quote no count at all: how many times we asked is our
+    business, and the reader can only act on when their watch last synced.
+    """
+    if settings is None:
+        settings = get_settings()
+
+    if is_broken:
+        attempt_word = "attempt" if failures == 1 else "attempts"
+        headline = (
+            f"MyCoach could not generate your briefing this morning — "
+            f"{failures} {attempt_word} hit an error. This is a fault on our "
+            f"side, not with your watch."
+        )
+    elif last_upload is not None:
+        headline = (
+            f"Your watch hasn't uploaded to Garmin since "
+            f"{_format_last_upload(last_upload, settings)}. Check that Bluetooth is "
+            f"on and that the Garmin Connect app has synced — MyCoach has nothing "
+            f"to read your recovery from until it does."
+        )
+    else:
+        headline = (
+            "Garmin still has no recovery data for today. Check that Bluetooth "
+            "is on and that the Garmin Connect app has synced."
+        )
+
+    if can_still_retry:
+        next_step = (
+            "MyCoach will keep checking every 15 minutes and will send your briefing "
+            "as soon as the data lands. It stops generating at 14:00 — a briefing "
+            "about this morning's recovery isn't worth much by the evening."
+        )
+    elif is_broken:
+        next_step = (
+            "Retries have stopped for today, so no further attempt will be made "
+            "automatically. The dashboard's regenerate button still works once "
+            "the cause is fixed."
+        )
+    else:
+        next_step = (
+            "The 14:00 cutoff has passed, so no briefing will be generated for "
+            "today. Tomorrow's runs as normal once your watch has synced."
+        )
+
+    html = _render_template(
+        "briefing_unavailable.html",
+        {
+            "day": day,
+            "headline": headline,
+            "next_step": next_step,
+            "detail": detail,
+            "last_upload": (
+                _format_last_upload(last_upload, settings) if last_upload else None
+            ),
+            "device_name": device_name,
+            "dashboard_url": _dashboard_url(settings),
+        },
+    )
+    return send_email(settings.email_to, "MyCoach — No Briefing Today", html, settings)
 
 
 def send_post_workout(content: dict, activity_title: str, settings: Settings | None = None) -> bool:  # type: ignore[type-arg]

@@ -17,13 +17,17 @@ from functools import partial
 
 from sqlalchemy import select
 
-from mycoach.coaching.context import get_today_health
 from mycoach.coaching.engine import CoachingEngine
-from mycoach.coaching.exceptions import NoAvailabilityConfigured, PipelineSkip
+from mycoach.coaching.exceptions import (
+    InsufficientHealthData,
+    NoAvailabilityConfigured,
+    PipelineSkip,
+)
 from mycoach.config import get_settings
 from mycoach.database import async_session
 from mycoach.email.sender import (
     EmailSendError,
+    send_briefing_unavailable,
     send_daily_briefing,
     send_no_availability,
     send_post_workout,
@@ -35,8 +39,15 @@ from mycoach.models.coaching import CoachingInsight
 from mycoach.models.job_run import JobRun
 from mycoach.models.plan import PlannedSession
 from mycoach.models.user import User
+from mycoach.scheduler.briefing_window import (
+    BRIEFING_ALERT_JOB,
+    BRIEFING_JOB,
+    GENERATE_CUTOFF,
+    BriefingWindow,
+    load_briefing_window,
+)
 from mycoach.sources.base import ImportResult
-from mycoach.sources.garmin.source import GarminSource
+from mycoach.sources.garmin.source import DeviceUpload, GarminSource
 from mycoach.sources.merger import merge_garmin_hevy
 
 logger = logging.getLogger(__name__)
@@ -44,20 +55,6 @@ logger = logging.getLogger(__name__)
 USER_ID = 1  # Single-user MVP
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-# The fields that make a briefing about recovery rather than about nothing —
-# sleep, HRV, and Body Battery. A snapshot can pass the empty-day guard (it has
-# *some* content, e.g. resting HR and steps) while carrying none of these, which
-# is exactly the 13/08 symptom the spec opens with. Named here so the intent
-# behind the check below is legible, not a bare inline tuple.
-_RECOVERY_FIELDS = (
-    "sleep_duration_minutes",
-    "sleep_score",
-    "hrv_status",
-    "hrv_7day_avg",
-    "hrv_status_text",
-    "body_battery_morning",
-)
 
 
 def _run_async(coro):  # type: ignore[no-untyped-def]
@@ -245,16 +242,58 @@ async def _garmin_sync(days: int | None = None) -> ImportResult:
             result.activities_created,
             merge_result.merged,
         )
+        # ``fetch_and_import`` already worked out which endpoints failed and
+        # which days came back empty; logging only the three counts threw that
+        # away, and re-deriving it later cost four ad-hoc probe scripts. A
+        # counts-only line cannot distinguish "Garmin returned nulls" from
+        # "every call raised", and those need opposite responses.
+        for error in result.errors or []:
+            logger.warning("Scheduler: Garmin sync detail — %s", error)
         return result
 
 
-def job_daily_briefing() -> None:
-    """Generate the daily coaching briefing."""
-    logger.info("Scheduler: generating daily briefing")
-    _run_recorded_job("daily_briefing", _daily_briefing())
+def job_daily_briefing_poll() -> None:
+    """One tick of the daily-briefing retry loop.
+
+    Registered on a 15-minute cron across the whole window rather than as a
+    single 09:30 entry. Whether a given tick does anything is decided from
+    ``job_runs``, not from the trigger, so a container restart mid-window
+    neither duplicates a briefing nor loses the day — see
+    ``mycoach.scheduler.briefing_window``.
+    """
+    _run_async(_daily_briefing_poll())
 
 
-async def _daily_briefing() -> None:
+async def _daily_briefing_poll() -> None:
+    """Decide from today's runs whether to generate, alert, both, or neither.
+
+    Deliberately *not* wrapped in ``_record_run``: a tick that decides to do
+    nothing must leave no trace, or the 15-minute poll would write ~44 rows a
+    day into the very table the decision is read from, and every attempt count
+    it derives would be nonsense. Only real work — an attempt, or an alert —
+    records a run.
+    """
+    async with async_session() as session:
+        window = await load_briefing_window(session)
+
+    if window.should_generate:
+        logger.info(
+            "Scheduler: daily briefing attempt %d for %s",
+            window.attempts + 1,
+            window.day,
+        )
+        await _record_run(BRIEFING_JOB, _daily_briefing(window.day))
+        # Re-read rather than reason forward from the old state: the attempt
+        # just made is exactly the one that decides whether an alert is due,
+        # and its outcome is only knowable from the row it wrote.
+        async with async_session() as session:
+            window = await load_briefing_window(session)
+
+    if window.should_alert:
+        await _record_run(BRIEFING_ALERT_JOB, _briefing_alert(window))
+
+
+async def _daily_briefing(today: date | None = None) -> None:
     """Sync fresh Garmin data, then generate the briefing from it.
 
     The sync is part of the job rather than a separate cron entry because the
@@ -262,44 +301,114 @@ async def _daily_briefing() -> None:
     without last night's sleep, and the standalone 06:00 sync runs before
     Garmin has finalised it. Encoding that in the job beats spacing two crons
     and hoping.
+
+    ``today`` is the local day the poll decided to brief on, so every attempt
+    in a window targets the same day even if one straddles midnight. Today only
+    — an older day is never backfilled.
+
+    The empty-data guard is *not* here. It lives in
+    ``CoachingEngine.generate_daily_briefing`` so this job, the retry loop and
+    the dashboard button all get the same answer; this body only decorates the
+    resulting skip with what the sync saw.
     """
-    today = date.today()
+    today = today or date.today()
 
     # A sync failure is not a reason to withhold a briefing — yesterday's data
-    # may well be enough, and the failure is logged either way. Only a
-    # confirmed absence of today's data below stops the run.
-    empty_days: list[date] = []
+    # may well be enough, and the failure is recorded either way. Only the
+    # engine's guard, below, decides whether there is anything to brief on.
+    sync_errors: list[str] = []
     try:
-        sync_result = await _garmin_sync()
-        empty_days = list(sync_result.empty_health_days)
-    except Exception as e:  # logged, and the briefing may still be viable
-        logger.error("Scheduler: pre-briefing Garmin sync failed — %s", e)
-
-    if today in empty_days:
-        raise PipelineSkip(
-            f"Garmin returned no usable health data for {today} — skipping the "
-            f"briefing rather than inferring recovery from nothing"
+        # A narrow lookback, unlike the standalone 06:00 sync's seven days. This
+        # runs on every tick of a 15-minute poll, and a seven-day window is
+        # ~80 Garmin requests — ~1,400 a day on a day with no data, against an
+        # account the whole loop depends on staying unthrottled. Recovering
+        # older late uploads is the 06:00 sync's job; this one only needs the
+        # day it is briefing about and the night either side of it.
+        sync_result = await _garmin_sync(
+            days=get_settings().scheduler_briefing_sync_lookback_days
         )
+        sync_errors = list(sync_result.errors or [])
+    except Exception as e:  # recorded, and the briefing may still be viable
+        logger.error("Scheduler: pre-briefing Garmin sync failed — %s", e)
+        sync_errors = [f"Garmin sync raised: {e}"]
 
     engine = CoachingEngine()
     async with async_session() as session:
-        # A day can carry some content (e.g. resting HR, steps) yet none of the
-        # fields the briefing exists to speak to. That is not "no data" — the
-        # skip above is deliberately narrow — but it must not pass silently.
-        today_health = await get_today_health(session, USER_ID, today)
-        if not any(field in today_health for field in _RECOVERY_FIELDS):
-            logger.warning(
-                "Scheduler: generating daily briefing for %s without any recovery "
-                "data (no sleep, HRV, or Body Battery)",
-                today,
-            )
+        try:
+            insight = await engine.generate_daily_briefing(session, USER_ID, today=today)
+        except InsufficientHealthData as e:
+            # The sync detail is folded into the skip reason here and nowhere
+            # else. It is the answer to the question this whole retry loop is
+            # for — "did Garmin return nulls, or did every call raise?" — and
+            # ``job_runs.skip_reason`` is the only place a reader will look for
+            # it days later.
+            raise InsufficientHealthData(_with_sync_detail(str(e), sync_errors)) from e
 
-        insight = await engine.generate_daily_briefing(session, USER_ID)
         logger.info("Scheduler: daily briefing generated")
 
         if await _get_user_email_pref("email_daily_briefing"):
             content = json.loads(insight.content)
             _deliver(partial(send_daily_briefing, content), "daily briefing")
+
+
+def _with_sync_detail(reason: str, sync_errors: list[str]) -> str:
+    """Append what the pre-briefing sync reported to a skip reason.
+
+    Truncated, because ``skip_reason`` is read by a human in a table: a
+    seven-day lookback can produce one line per day per failing endpoint, and
+    the first few say everything the rest repeat.
+    """
+    if not sync_errors:
+        return reason
+    shown = sync_errors[:3]
+    suffix = "; ".join(shown)
+    if len(sync_errors) > len(shown):
+        suffix += f"; (+{len(sync_errors) - len(shown)} more)"
+    return f"{reason} | sync reported: {suffix}"
+
+
+async def _briefing_alert(window: BriefingWindow) -> None:
+    """Email the user that this morning has produced no briefing.
+
+    Runs under ``_record_run`` as ``daily_briefing_alert``, which is what makes
+    "at most one email per day" true without any state of its own: the next
+    poll sees the recorded run and stands down.
+
+    The last-upload lookup is best-effort and deliberately skipped when the
+    fault is ours — asking Garmin when the watch last synced is neither
+    relevant to a validation error nor worth the round trip.
+    """
+    if not await _get_user_email_pref("email_daily_briefing"):
+        raise PipelineSkip(
+            "daily briefing email is switched off — no alert to send"
+        )
+
+    upload = None if window.is_broken else await _last_device_upload()
+
+    _deliver(
+        partial(
+            send_briefing_unavailable,
+            day=window.day.strftime("%A, %B %-d"),
+            failures=window.failed_attempts,
+            is_broken=window.is_broken,
+            can_still_retry=(
+                window.now.time() < GENERATE_CUTOFF and not window.budget_exhausted
+            ),
+            detail=window.last_detail,
+            last_upload=upload.uploaded_at if upload else None,
+            device_name=upload.device_name if upload else None,
+        ),
+        "briefing unavailable",
+    )
+
+
+async def _last_device_upload() -> DeviceUpload | None:
+    """Ask Garmin when the watch last uploaded, or None if it won't say."""
+    source = GarminSource()
+    if not await source.authenticate():
+        logger.warning("Scheduler: Garmin auth failed during briefing alert")
+        return None
+    return source.get_last_device_upload()
 
 
 

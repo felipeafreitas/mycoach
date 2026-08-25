@@ -9,9 +9,17 @@ from mycoach.database import Base
 class JobRun(Base):
     """Durable record of a single scheduled-job execution.
 
-    Append-only, write-only exhaust: nothing in the coaching, source, or
-    scheduler logic ever reads it. Idempotency comes from checking for existing
-    insights, never from querying run history.
+    Append-only, and — since the daily-briefing retry window — no longer
+    write-only. ``mycoach.scheduler.briefing_window`` derives that window's
+    entire state from these rows: whether today's briefing has succeeded, how
+    many attempts have been made since the window opened, whether each ended in
+    a skip or a real failure, and whether the user has already been emailed.
+
+    That is deliberate rather than convenient. The scheduler has no jobstore and
+    rebuilds its jobs on every boot, so anything held in memory is lost to a
+    container restart; a table already written on every run is the only place
+    the state can live without inventing one. Idempotency for *insights* still
+    comes from checking for the insight itself, never from run history.
     """
 
     __tablename__ = "job_runs"

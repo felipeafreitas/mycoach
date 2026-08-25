@@ -89,6 +89,16 @@ class GarminClient:
         """Get SpO2 data for a day."""
         return self.api.get_spo2_data(day.isoformat())  # type: ignore[no-any-return]
 
+    def get_device_last_used(self) -> dict[str, Any]:
+        """Get the last-used device, including when it last uploaded to Garmin.
+
+        This is the only endpoint that distinguishes "the watch has nothing to
+        say about today" from "the watch has not spoken to Garmin's servers
+        since Tuesday" — the two look identical in a day's health response, and
+        only the second is something the user can act on.
+        """
+        return self.api.get_device_last_used()  # type: ignore[no-any-return]
+
     def get_activities_by_date(self, start: date, end: date) -> list[dict[str, Any]]:
         """Get activities for a date range."""
         return self.api.get_activities_by_date(  # type: ignore[no-any-return]

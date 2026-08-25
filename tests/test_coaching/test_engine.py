@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from mycoach.coaching.engine import CoachingEngine
-from mycoach.coaching.exceptions import PipelineSkip
+from mycoach.coaching.exceptions import InsufficientHealthData, PipelineSkip
 from mycoach.coaching.llm_client import LLMResponse
 from mycoach.models.health import DailyHealthSnapshot
 from mycoach.models.prompt_log import PromptLog
@@ -44,6 +44,24 @@ def _mock_llm_client(content: str = VALID_LLM_RESPONSE) -> MagicMock:
     client.daily_model = "claude-sonnet-4-5-20250929"
     client.weekly_model = "claude-opus-4-6"
     return client
+
+
+async def _add_recovery_snapshot(session: object, user_id: int, day: date) -> None:
+    """Give the day enough recovery data to clear the engine's empty-data guard.
+
+    Every daily-briefing path now refuses a day with no sleep, HRV, or Body
+    Battery, so a test about anything *else* still has to supply one.
+    """
+    session.add(  # type: ignore[union-attr]
+        DailyHealthSnapshot(
+            user_id=user_id,
+            snapshot_date=day,
+            resting_hr=55,
+            sleep_score=82,
+            sleep_duration_minutes=450,
+        )
+    )
+    await session.commit()  # type: ignore[union-attr]
 
 
 async def _create_user(session: object) -> int:
@@ -86,6 +104,7 @@ class TestGenerateDailyBriefing:
         async with test_session() as session:
             user_id = await _create_user(session)
             today = date(2024, 6, 10)
+            await _add_recovery_snapshot(session, user_id, today)
 
             mock_llm = _mock_llm_client()
             engine = CoachingEngine(llm_client=mock_llm)
@@ -103,6 +122,7 @@ class TestGenerateDailyBriefing:
         async with test_session() as session:
             user_id = await _create_user(session)
             today = date(2024, 6, 10)
+            await _add_recovery_snapshot(session, user_id, today)
 
             mock_llm = _mock_llm_client()
             engine = CoachingEngine(llm_client=mock_llm)
@@ -111,10 +131,94 @@ class TestGenerateDailyBriefing:
             with pytest.raises(PipelineSkip, match="already exists"):
                 await engine.generate_daily_briefing(session, user_id, today)
 
+    async def test_refuses_a_day_with_no_health_snapshot_at_all(self) -> None:
+        """The guard lives here so cron, retry loop and button cannot drift.
+
+        For six days the dashboard invited the user to press a button that
+        bypassed this rule entirely and would have briefed on nothing.
+        """
+        async with test_session() as session:
+            user_id = await _create_user(session)
+            mock_llm = _mock_llm_client()
+            engine = CoachingEngine(llm_client=mock_llm)
+
+            with pytest.raises(InsufficientHealthData, match="no Garmin health snapshot"):
+                await engine.generate_daily_briefing(session, user_id, date(2024, 6, 10))
+
+            mock_llm.call.assert_not_called()
+
+    async def test_refuses_a_day_carrying_no_recovery_data(self) -> None:
+        """Resting HR and steps are content, but they are not recovery.
+
+        Garmin answers a day it has nothing for with a well-formed document of
+        nulls; a snapshot can survive that and still hold nothing worth
+        coaching from.
+        """
+        async with test_session() as session:
+            user_id = await _create_user(session)
+            today = date(2024, 6, 10)
+            session.add(
+                DailyHealthSnapshot(
+                    user_id=user_id, snapshot_date=today, resting_hr=58, steps=10234
+                )
+            )
+            await session.commit()
+
+            mock_llm = _mock_llm_client()
+            engine = CoachingEngine(llm_client=mock_llm)
+
+            with pytest.raises(InsufficientHealthData, match="no sleep, HRV, or Body Battery"):
+                await engine.generate_daily_briefing(session, user_id, today)
+
+            mock_llm.call.assert_not_called()
+
+    async def test_the_guard_is_a_skip_not_a_failure(self) -> None:
+        """Withholding a briefing from an empty day is correct, not a fault.
+
+        The retry loop reads this straight off ``job_runs``: a skip retries
+        freely, a failure burns the budget.
+        """
+        assert issubclass(InsufficientHealthData, PipelineSkip)
+
+    async def test_force_overrides_the_guard(self) -> None:
+        """The one documented escape hatch, unchanged."""
+        async with test_session() as session:
+            user_id = await _create_user(session)
+            today = date(2024, 6, 10)
+            session.add(
+                DailyHealthSnapshot(user_id=user_id, snapshot_date=today, resting_hr=58)
+            )
+            await session.commit()
+
+            engine = CoachingEngine(llm_client=_mock_llm_client())
+            insight = await engine.generate_daily_briefing(
+                session, user_id, today, force=True
+            )
+
+        assert insight.insight_type == "daily_briefing"
+
+    async def test_any_one_recovery_field_is_enough(self) -> None:
+        """Body Battery alone is a thin day, but it is a day worth speaking to."""
+        async with test_session() as session:
+            user_id = await _create_user(session)
+            today = date(2024, 6, 10)
+            session.add(
+                DailyHealthSnapshot(
+                    user_id=user_id, snapshot_date=today, body_battery_morning=64
+                )
+            )
+            await session.commit()
+
+            engine = CoachingEngine(llm_client=_mock_llm_client())
+            insight = await engine.generate_daily_briefing(session, user_id, today)
+
+        assert insight.insight_type == "daily_briefing"
+
     async def test_llm_failure_raises_and_logs(self) -> None:
         async with test_session() as session:
             user_id = await _create_user(session)
             today = date(2024, 6, 10)
+            await _add_recovery_snapshot(session, user_id, today)
 
             mock_llm = _mock_llm_client()
             mock_llm.call.side_effect = Exception("API timeout")
@@ -133,6 +237,7 @@ class TestGenerateDailyBriefing:
         async with test_session() as session:
             user_id = await _create_user(session)
             today = date(2024, 6, 10)
+            await _add_recovery_snapshot(session, user_id, today)
 
             mock_llm = _mock_llm_client()
             # First call returns bad JSON, second call returns valid
