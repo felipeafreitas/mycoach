@@ -221,9 +221,53 @@
             .catch(function () {});
     }
 
+    // ── Screen wake lock ────────────────────────────────────────────
+    /* The screen dimming mid-set is the loudest way this feels worse than a
+       paper notebook. The lock is held for exactly as long as an editable
+       session is on screen — acquired when one is opened, released the moment
+       we return home.
+
+       iOS drops the lock whenever the tab backgrounds and never hands it
+       back on its own, so intent (`wakeWanted`) is tracked separately from
+       the sentinel and re-asserted on `visibilitychange`. Every failure path
+       is silent: no wake lock on an unsupported phone is a worse session,
+       not a broken one, and a toast mid-set is noise. */
+    var wakeSentinel = null;
+    var wakeWanted = false;
+    var wakeRequesting = false;
+
+    function acquireWakeLock() {
+        wakeWanted = true;
+        if (!navigator.wakeLock || wakeSentinel || wakeRequesting) return;
+        // A request while hidden is rejected by the browser; the
+        // visibilitychange handler re-asserts it on the way back.
+        if (document.visibilityState !== "visible") return;
+        wakeRequesting = true;
+        navigator.wakeLock.request("screen").then(function (sentinel) {
+            wakeRequesting = false;
+            // Released while the request was still in flight.
+            if (!wakeWanted) { sentinel.release().catch(function () {}); return; }
+            wakeSentinel = sentinel;
+            sentinel.addEventListener("release", function () {
+                if (wakeSentinel === sentinel) wakeSentinel = null;
+            });
+        }).catch(function () {
+            wakeRequesting = false;
+        });
+    }
+
+    function releaseWakeLock() {
+        wakeWanted = false;
+        if (!wakeSentinel) return;
+        var sentinel = wakeSentinel;
+        wakeSentinel = null;
+        sentinel.release().catch(function () {});
+    }
+
     // ── Rendering: Home ─────────────────────────────────────────────
     function render() {
         state.activeId = null;
+        releaseWakeLock();
         setActionbar(null);
         var view = $("view");
         view.innerHTML = "";
@@ -328,6 +372,8 @@
         getSession(id).then(function (s) {
             if (!s) { render(); return; }
             state.activeId = id;
+            if (s.synced) releaseWakeLock(); // read-only: nothing to keep awake for
+            else acquireWakeLock();
             renderSession(s);
         });
     }
@@ -535,7 +581,10 @@
     document.addEventListener("visibilitychange", function () {
         // Walking back into LAN range and reopening the tab should retry
         // without waiting for the next manual sync press.
-        if (document.visibilityState === "visible") syncNow(false);
+        if (document.visibilityState !== "visible") return;
+        syncNow(false);
+        // iOS silently drops the lock when the tab backgrounds.
+        if (wakeWanted) acquireWakeLock();
     });
 
     getMeta("exercises").then(function (list) { if (list) state.exerciseCache = list; });
