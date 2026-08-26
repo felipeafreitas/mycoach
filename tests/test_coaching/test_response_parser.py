@@ -38,7 +38,8 @@ VALID_BRIEFING = """{
   "sleep_recommendation": "Aim for 10:30 PM bedtime.",
   "key_metrics": {
     "body_battery": 80,
-    "hrv_status": 45.0,
+    "hrv_last_night_avg": 45.0,
+    "hrv_status_text": "BALANCED",
     "sleep_score": 82,
     "training_readiness": 75,
     "resting_hr": 55
@@ -51,7 +52,8 @@ class TestParseResponse:
         result = parse_response(VALID_BRIEFING, DailyBriefingResponse)
         assert result.readiness_verdict == "go_hard"
         assert result.key_metrics.body_battery == 80
-        assert result.key_metrics.hrv_status == 45.0
+        assert result.key_metrics.hrv_last_night_avg == 45.0
+        assert result.key_metrics.hrv_status_text == "BALANCED"
 
     def test_json_in_code_block(self) -> None:
         text = f"```json\n{VALID_BRIEFING}\n```"
@@ -75,7 +77,51 @@ class TestParseResponse:
 
     def test_null_key_metrics(self) -> None:
         data = json.loads(VALID_BRIEFING)
-        data["key_metrics"] = {"body_battery": None, "hrv_status": None}
+        data["key_metrics"] = {"body_battery": None, "hrv_last_night_avg": None}
         result = parse_response(json.dumps(data), DailyBriefingResponse)
         assert result.key_metrics.body_battery is None
         assert result.key_metrics.sleep_score is None
+
+
+class TestBriefingHrvFields:
+    """The LLM confuses Garmin's two HRV fields: a number (lastNightAvg) and a
+    word (status). Neither confusion may cost us the whole briefing.
+    """
+
+    def _parse_metrics(self, **key_metrics: object) -> DailyBriefingResponse:
+        data = json.loads(VALID_BRIEFING)
+        data["key_metrics"] = key_metrics
+        return parse_response(json.dumps(data), DailyBriefingResponse)
+
+    def test_status_word_in_numeric_field_routes_to_text(self) -> None:
+        result = self._parse_metrics(hrv_last_night_avg="BALANCED")
+        assert result.key_metrics.hrv_last_night_avg is None
+        assert result.key_metrics.hrv_status_text == "BALANCED"
+
+    def test_status_word_under_legacy_name_routes_to_text(self) -> None:
+        result = self._parse_metrics(hrv_status="BALANCED")
+        assert result.key_metrics.hrv_last_night_avg is None
+        assert result.key_metrics.hrv_status_text == "BALANCED"
+
+    def test_legacy_numeric_field_name_still_accepted(self) -> None:
+        result = self._parse_metrics(hrv_status=82)
+        assert result.key_metrics.hrv_last_night_avg == 82.0
+
+    def test_numeric_string_still_parses_as_a_number(self) -> None:
+        result = self._parse_metrics(hrv_last_night_avg="82.0")
+        assert result.key_metrics.hrv_last_night_avg == 82.0
+        assert result.key_metrics.hrv_status_text is None
+
+    def test_routed_word_does_not_clobber_an_explicit_status_text(self) -> None:
+        result = self._parse_metrics(hrv_last_night_avg="BALANCED", hrv_status_text="UNBALANCED")
+        assert result.key_metrics.hrv_status_text == "UNBALANCED"
+
+    def test_number_with_a_unit_is_still_a_number(self) -> None:
+        result = self._parse_metrics(hrv_last_night_avg="82 ms")
+        assert result.key_metrics.hrv_last_night_avg == 82.0
+        assert result.key_metrics.hrv_status_text is None
+
+    def test_blank_numeric_field_leaves_both_fields_empty(self) -> None:
+        result = self._parse_metrics(hrv_last_night_avg="  ")
+        assert result.key_metrics.hrv_last_night_avg is None
+        assert result.key_metrics.hrv_status_text is None

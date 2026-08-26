@@ -66,7 +66,7 @@ def test_format_key_metrics_maps_labels_and_skips_none() -> None:
     rows = _format_key_metrics(
         {
             "body_battery": 65,
-            "hrv_status": None,
+            "hrv_last_night_avg": None,
             "sleep_score": 78,
             "training_readiness": None,
             "resting_hr": 52,
@@ -75,6 +75,18 @@ def test_format_key_metrics_maps_labels_and_skips_none() -> None:
     assert rows == {"Body Battery": "65", "Sleep Score": "78", "Resting HR": "52 bpm"}
     # Display order is the order emails show, so it must survive the mapping.
     assert list(rows) == ["Body Battery", "Sleep Score", "Resting HR"]
+
+
+def test_format_key_metrics_shows_both_hrv_fields() -> None:
+    """The HRV number and the HRV status word are separate rows, separately labelled."""
+    rows = _format_key_metrics({"hrv_last_night_avg": 82.0, "hrv_status_text": "BALANCED"})
+    assert rows == {"Avg HRV": "82.0 ms", "HRV Status": "BALANCED"}
+
+
+def test_format_key_metrics_renders_briefings_stored_before_the_hrv_rename() -> None:
+    """Insights saved under the old `hrv_status` name still render their number."""
+    rows = _format_key_metrics({"hrv_status": 82.0})
+    assert rows == {"Avg HRV": "82.0 ms"}
 
 
 def test_format_session_details_gym_exercises() -> None:
@@ -427,14 +439,17 @@ def test_send_daily_briefing_formats_raw_key_metrics(mock_send: MagicMock) -> No
     """send_daily_briefing formats the raw Pydantic-shaped key_metrics before rendering."""
     settings = _make_settings()
     send_daily_briefing(
-        {"readiness_verdict": "moderate", "key_metrics": {"resting_hr": 52, "hrv_status": None}},
+        {
+            "readiness_verdict": "moderate",
+            "key_metrics": {"resting_hr": 52, "hrv_last_night_avg": None},
+        },
         settings=settings,
     )
     html = mock_send.call_args[0][2]
     assert "Resting HR" in html
     assert "52" in html
     assert "bpm" in html
-    assert "HRV Status" not in html  # None values are skipped
+    assert "Avg HRV" not in html  # None values are skipped
 
 
 @patch("mycoach.email.sender.send_email", return_value=True)

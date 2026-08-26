@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any, TypeVar
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -107,12 +107,72 @@ class CardioPlanResponse(BaseModel):
     weekly_summary: str
 
 
+# The keys the model may put the overnight HRV number under: the current field
+# name and the pre-rename one, which older stored briefings still carry.
+_HRV_NUMERIC_KEYS = ("hrv_last_night_avg", "hrv_status")
+
+
 class DailyBriefingKeyMetrics(BaseModel):
+    """The briefing's headline numbers.
+
+    HRV arrives from Garmin's ``hrvSummary`` as two different things — a number
+    (``lastNightAvg``) and a word (``status``: "BALANCED") — so this model keeps
+    them in two fields whose names say which is which. The old name for the
+    number, ``hrv_status``, read like it wanted the word, and the model
+    periodically obliged and lost the whole briefing to a validation error.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
     body_battery: int | None = None
-    hrv_status: float | None = None
+    hrv_last_night_avg: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices(*_HRV_NUMERIC_KEYS),
+    )
+    hrv_status_text: str | None = None
     sleep_score: int | None = None
     training_readiness: int | None = None
     resting_hr: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _route_status_word_out_of_the_number(cls, data: Any) -> Any:
+        """Move a non-numeric HRV value into the text field instead of failing.
+
+        A briefing that names the HRV state but not its value is worth far more
+        than no briefing at all, and this is the one field the model is known to
+        confuse. An explicit ``hrv_status_text`` wins over the routed word.
+        """
+        if not isinstance(data, dict):
+            return data
+        for key in _HRV_NUMERIC_KEYS:
+            value = data.get(key)
+            if not isinstance(value, str):
+                continue
+            text = value.strip()
+            try:
+                float(text)
+            except ValueError:
+                pass
+            else:
+                continue  # a plain numeric string; pydantic coerces it itself
+            data = {**data, key: None}
+            if not text:
+                continue
+            number = re.fullmatch(r"([-+]?\d*\.?\d+)\s*[a-zA-Z/%]*", text)
+            if number:
+                # "82 ms" and friends: a number wearing a unit, not a status word.
+                data[key] = float(number.group(1))
+                continue
+            logger.warning(
+                "LLM returned %r for the numeric %s; routing it to hrv_status_text",
+                value,
+                key,
+            )
+            data.setdefault("hrv_status_text", None)
+            if data["hrv_status_text"] is None:
+                data["hrv_status_text"] = text
+        return data
 
 
 class DailyBriefingResponse(BaseModel):

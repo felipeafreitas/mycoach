@@ -48,7 +48,11 @@ def _render_template(template_name: str, context: dict) -> str:  # type: ignore[
 # emails should show them. Keys absent or None are skipped.
 _KEY_METRICS_DISPLAY: dict[str, tuple[str, str]] = {
     "body_battery": ("Body Battery", ""),
-    "hrv_status": ("HRV Status", ""),
+    "hrv_last_night_avg": ("Avg HRV", "ms"),
+    # Briefings stored before the hrv_status rename keep the number under the
+    # old key; both never appear together, so they can share a label.
+    "hrv_status": ("Avg HRV", "ms"),
+    "hrv_status_text": ("HRV Status", ""),
     "sleep_score": ("Sleep Score", ""),
     "training_readiness": ("Training Readiness", ""),
     "resting_hr": ("Resting HR", "bpm"),
