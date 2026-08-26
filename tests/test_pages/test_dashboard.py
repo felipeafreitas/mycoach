@@ -2,6 +2,7 @@
 
 import json
 from datetime import date, datetime, timedelta
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -10,6 +11,7 @@ from httpx import AsyncClient
 from mycoach.config import get_settings
 from mycoach.models.coaching import CoachingInsight
 from mycoach.models.health import DailyHealthSnapshot
+from mycoach.models.job_run import JobRun
 from mycoach.models.plan import PlannedSession, WeeklyPlan
 from mycoach.models.user import User
 from tests.conftest import test_session
@@ -357,3 +359,72 @@ async def test_dashboard_sync_stamp_advances_on_no_op_resync(client: AsyncClient
 
     resp = await client.get("/")
     assert resp.text != first_sync_text
+
+
+async def test_dashboard_reports_the_retry_loops_own_state(client: AsyncClient) -> None:
+    """The old text blamed a sync that had in fact succeeded.
+
+    ``dashboard.html`` is server-rendered Jinja and ``job_runs`` is an ordinary
+    table, so the true state is one query away — no new API endpoint. The
+    window is forced open from midnight so the assertion does not depend on
+    what time the suite happens to run.
+    """
+    await _seed_user()
+    async with test_session() as session:
+        for i in range(4):
+            session.add(
+                JobRun(
+                    job_name="daily_briefing",
+                    started_at=datetime.utcnow() - timedelta(minutes=15 * (i + 1)),
+                    duration_ms=800,
+                    status="skipped",
+                    skip_reason="no usable Garmin health data",
+                )
+            )
+        await session.commit()
+
+    always_open = get_settings().model_copy(
+        update={"scheduler_briefing_hour": 0, "scheduler_briefing_minute": 0}
+    )
+    with patch(
+        "mycoach.scheduler.briefing_window.get_settings", return_value=always_open
+    ):
+        resp = await client.get("/")
+
+    assert resp.status_code == 200
+    assert "Waiting on Garmin" in resp.text or "never returned" in resp.text
+    assert "No daily briefing generated yet" not in resp.text
+
+
+async def test_dashboard_disables_the_button_it_knows_would_be_refused(
+    client: AsyncClient,
+) -> None:
+    """Six days of inviting a click that would have briefed on nothing."""
+    await _seed_user()
+    async with test_session() as session:
+        session.add(
+            DailyHealthSnapshot(user_id=1, snapshot_date=date.today(), resting_hr=58)
+        )
+        await session.commit()
+
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "Can&#39;t generate:" in resp.text or "Can't generate:" in resp.text
+    assert "sleep, HRV, or Body Battery" in resp.text
+
+
+async def test_dashboard_leaves_the_button_alone_on_a_usable_day(
+    client: AsyncClient,
+) -> None:
+    await _seed_user()
+    async with test_session() as session:
+        session.add(
+            DailyHealthSnapshot(
+                user_id=1, snapshot_date=date.today(), resting_hr=58, sleep_score=82
+            )
+        )
+        await session.commit()
+
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "Can't generate" not in resp.text and "Can&#39;t generate" not in resp.text

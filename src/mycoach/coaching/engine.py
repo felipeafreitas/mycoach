@@ -30,7 +30,11 @@ from mycoach.coaching.context import (
     get_today_planned_sessions,
     link_activity_to_planned_session,
 )
-from mycoach.coaching.exceptions import NoAvailabilityConfigured, PipelineSkip
+from mycoach.coaching.exceptions import (
+    InsufficientHealthData,
+    NoAvailabilityConfigured,
+    PipelineSkip,
+)
 from mycoach.coaching.llm_client import LLMClient, LLMResponse, get_llm_client
 from mycoach.coaching.prompt_builder import (
     build_cardio_plan_prompt,
@@ -40,6 +44,7 @@ from mycoach.coaching.prompt_builder import (
     build_weekly_recap_prompt,
     get_system_prompt,
 )
+from mycoach.coaching.recovery_data import missing_recovery_data
 from mycoach.coaching.response_parser import (
     CardioPlanResponse,
     DailyBriefingResponse,
@@ -102,6 +107,16 @@ class CoachingEngine:
 
         # Gather context
         health_today = await get_today_health(session, user_id, today)
+
+        # The empty-data guard lives here, not in the scheduler job, so cron,
+        # retry loop and dashboard button cannot drift apart on what counts as
+        # a day worth briefing about. ``force`` remains the explicit escape
+        # hatch, as it is for the already-exists check above.
+        if not force:
+            missing = missing_recovery_data(health_today)
+            if missing is not None:
+                raise InsufficientHealthData(missing)
+
         health_trends = await get_health_trends(session, user_id, days=3, today=today)
         recent_activities = await get_recent_activities(session, user_id, days=3, today=today)
         planned_sessions = await get_today_planned_sessions(session, user_id, today)

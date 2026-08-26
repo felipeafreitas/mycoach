@@ -10,10 +10,13 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mycoach.coaching.context import get_today_health
+from mycoach.coaching.recovery_data import missing_recovery_data
 from mycoach.database import get_db
 from mycoach.models.coaching import CoachingInsight
 from mycoach.models.health import DailyHealthSnapshot
 from mycoach.models.plan import PlannedSession, WeeklyPlan
+from mycoach.scheduler.briefing_window import load_briefing_window
 
 router = APIRouter(tags=["pages"])
 
@@ -141,12 +144,28 @@ async def dashboard(
         )
     )
 
+    # Why there is no briefing, straight from the retry loop's own record. The
+    # page is server-rendered Jinja and job_runs is an ordinary table, so this
+    # is one query rather than a new API endpoint.
+    briefing_banner = None
+    if briefing is None:
+        window = await load_briefing_window(session)
+        briefing_banner = window.banner
+
+    # And why the Generate button would refuse — the same guard the endpoint
+    # behind the button now enforces, asked before the click rather than after.
+    briefing_blocked_reason = missing_recovery_data(
+        await get_today_health(session, USER_ID, today)
+    )
+
     templates: Jinja2Templates = request.app.state.templates
 
     return templates.TemplateResponse(
         request,
         "dashboard.html",
         {
+            "briefing_banner": briefing_banner,
+            "briefing_blocked_reason": briefing_blocked_reason,
             "active_page": "dashboard",
             "today_str": today.strftime("%B %d, %Y"),
             "weekday": DAY_NAMES[weekday_num],

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}No Briefing Today{% endblock %}
+{% block subtitle %}No briefing today{% endblock %}
+{% block content %}
+
+<!-- Hero -->
+<tr>
+  <td class="px" style="padding-top:26px;padding-bottom:18px;">
+    <div class="eyebrow">{{ day }}</div>
+    <div class="verdict" style="font-size:32px;margin-top:10px;">No briefing yet</div>
+    <div class="rule" style="margin-top:16px;">&nbsp;</div>
+    <div class="lead" style="margin-top:14px;">{{ headline }}</div>
+  </td>
+</tr>
+
+{% if last_upload %}
+<!-- The one fact the reader can act on -->
+<tr>
+  <td class="px" style="padding-top:6px;padding-bottom:6px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid rgba(0,0,0,.08);">
+      <tr>
+        <td class="mrow mlabel" style="padding:12px 0;">Last upload</td>
+        <td class="mrow mval" style="padding:12px 0;">{{ last_upload }}</td>
+      </tr>
+      {% if device_name %}
+      <tr>
+        <td class="mrow mlabel" style="padding:12px 0;">Device</td>
+        <td class="mrow mval" style="padding:12px 0;">{{ device_name }}</td>
+      </tr>
+      {% endif %}
+    </table>
+  </td>
+</tr>
+{% endif %}
+
+<tr>
+  <td class="px block-b" style="padding-top:20px;padding-bottom:2px;">
+    <div class="sec" style="margin-bottom:8px;">What happens next</div>
+    <div class="p">{{ next_step }}</div>
+  </td>
+</tr>
+
+{% if detail %}
+<tr>
+  <td class="px block-b" style="padding-top:20px;padding-bottom:2px;">
+    <div class="sec" style="margin-bottom:8px;">Detail</div>
+    <div class="p">{{ detail }}</div>
+  </td>
+</tr>
+{% endif %}
+
+<tr>
+  <td class="px" style="padding-top:22px;padding-bottom:28px;">
+    <a href="{{ dashboard_url|default('#') }}" class="cta">Open the dashboard &rarr;</a>
+  </td>
+</tr>
+{% endblock %}

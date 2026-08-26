@@ -1,5 +1,6 @@
 """Tests for the email sender module."""
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,6 +11,7 @@ from mycoach.email.sender import (
     _format_key_metrics,
     _format_session_details,
     _render_template,
+    send_briefing_unavailable,
     send_daily_briefing,
     send_email,
     send_no_availability,
@@ -462,3 +464,147 @@ def test_send_weekly_recap_wires_dashboard_url(mock_send: MagicMock) -> None:
     send_weekly_recap(content={"week_summary": "Solid"}, week_start="2025-02-24", settings=settings)
     html = mock_send.call_args[0][2]
     assert "https://coach.example.com/dashboard" in html
+
+
+# --- Briefing-unavailable alert ---
+#
+# The whole point of this email is that it names something the reader can act
+# on, and that it names the *right* thing: a "check your Bluetooth" message for
+# what was actually a validation error inside our own pipeline is worse than no
+# email at all.
+
+
+@patch("mycoach.email.sender.send_email", return_value=True)
+def test_briefing_alert_names_the_real_gap(mock_send: MagicMock) -> None:
+    settings = _make_settings(timezone="Europe/London")
+    result = send_briefing_unavailable(
+        day="Tuesday, August 25",
+        failures=0,
+        is_broken=False,
+        can_still_retry=True,
+        last_upload=datetime(2026, 8, 19, 4, 20, tzinfo=UTC),
+        device_name="Forerunner 255 Music",
+        settings=settings,
+    )
+    assert result is True
+    html = mock_send.call_args[0][2]
+    assert "hasn&#39;t uploaded to Garmin since Aug 19 at 05:20" in html
+    assert "Bluetooth" in html
+    assert "Forerunner 255 Music" in html
+
+
+@patch("mycoach.email.sender.send_email", return_value=True)
+def test_briefing_alert_renders_the_upload_time_in_the_users_timezone(
+    mock_send: MagicMock,
+) -> None:
+    """05:20 BST, not 04:20 UTC — the reader compares it against their morning."""
+    settings = _make_settings(timezone="Europe/London")
+    send_briefing_unavailable(
+        day="Tuesday, August 25",
+        failures=0,
+        is_broken=False,
+        can_still_retry=True,
+        last_upload=datetime(2026, 8, 19, 4, 20, tzinfo=UTC),
+        settings=settings,
+    )
+    assert "Aug 19 at 05:20" in mock_send.call_args[0][2]
+
+
+@patch("mycoach.email.sender.send_email", return_value=True)
+def test_briefing_alert_counts_errors_not_skips(mock_send: MagicMock) -> None:
+    """Four data-less skips plus one real error is one error, not five.
+
+    Reporting five would send the reader hunting for a fault that isn't there.
+    """
+    send_briefing_unavailable(
+        day="Tuesday, August 25",
+        failures=1,
+        is_broken=True,
+        can_still_retry=True,
+        settings=_make_settings(),
+    )
+    html = mock_send.call_args[0][2]
+    assert "1 attempt hit an error" in html
+
+
+@patch("mycoach.email.sender.send_email", return_value=True)
+def test_briefing_alert_quotes_no_count_when_the_watch_is_at_fault(
+    mock_send: MagicMock,
+) -> None:
+    """How many times we asked is our business; when the watch last synced is theirs."""
+    send_briefing_unavailable(
+        day="Tuesday, August 25",
+        failures=0,
+        is_broken=False,
+        can_still_retry=True,
+        settings=_make_settings(),
+    )
+    html = mock_send.call_args[0][2]
+    assert "0 attempts" not in html
+    assert "hit an error" not in html
+    assert "Bluetooth" in html
+
+
+@patch("mycoach.email.sender.send_email", return_value=True)
+def test_briefing_alert_does_not_blame_the_watch_for_our_own_fault(
+    mock_send: MagicMock,
+) -> None:
+    settings = _make_settings()
+    send_briefing_unavailable(
+        day="Tuesday, August 25",
+        failures=3,
+        is_broken=True,
+        can_still_retry=False,
+        detail="hrv_status: Input should be a valid number",
+        settings=settings,
+    )
+    html = mock_send.call_args[0][2]
+    assert "Bluetooth" not in html
+    assert "fault on our side" in html
+    assert "hrv_status" in html
+
+
+@patch("mycoach.email.sender.send_email", return_value=True)
+def test_briefing_alert_says_more_attempts_are_coming(mock_send: MagicMock) -> None:
+    settings = _make_settings()
+    send_briefing_unavailable(
+        day="Tuesday, August 25",
+        failures=0,
+        is_broken=False,
+        can_still_retry=True,
+        settings=settings,
+    )
+    html = mock_send.call_args[0][2]
+    assert "every 15 minutes" in html
+    assert "14:00" in html
+
+
+@patch("mycoach.email.sender.send_email", return_value=True)
+def test_briefing_alert_says_when_the_day_is_over(mock_send: MagicMock) -> None:
+    settings = _make_settings()
+    send_briefing_unavailable(
+        day="Tuesday, August 25",
+        failures=0,
+        is_broken=False,
+        can_still_retry=False,
+        settings=settings,
+    )
+    html = mock_send.call_args[0][2]
+    assert "cutoff has passed" in html
+
+
+@patch("mycoach.email.sender.send_email", return_value=True)
+def test_briefing_alert_works_without_an_upload_time(mock_send: MagicMock) -> None:
+    """Garmin may not say; the alert still has to go."""
+    settings = _make_settings()
+    result = send_briefing_unavailable(
+        day="Tuesday, August 25",
+        failures=0,
+        is_broken=False,
+        can_still_retry=True,
+        settings=settings,
+    )
+    assert result is True
+    html = mock_send.call_args[0][2]
+    assert "Last upload" not in html
+    assert "Bluetooth" in html

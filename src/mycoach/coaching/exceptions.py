@@ -20,3 +20,15 @@ class NoAvailabilityConfigured(PipelineSkip):
     specifically (e.g. sending a "we couldn't plan your week" email) without
     parsing the skip message.
     """
+
+
+class InsufficientHealthData(PipelineSkip):
+    """Raised when the day has no recovery data to build a briefing from.
+
+    A subtype of ``PipelineSkip`` because withholding the briefing is the
+    correct no-op, not a fault — but distinguished from a plain skip because
+    callers must react differently: the manual endpoint answers 422 (the day
+    cannot support the request) rather than 409 (the briefing already exists),
+    and the retry loop keeps retrying this outcome while a real failure burns
+    the failure budget.
+    """

@@ -128,7 +128,7 @@ async def test_daily_briefing_body_records_run() -> None:
     with (
         patch(
             "mycoach.scheduler.jobs._garmin_sync",
-            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+            AsyncMock(return_value=MagicMock(empty_health_days=[], errors=None)),
         ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
         patch("mycoach.scheduler.jobs.async_session", test_session),
@@ -153,7 +153,7 @@ async def test_daily_briefing_body_records_skip() -> None:
     with (
         patch(
             "mycoach.scheduler.jobs._garmin_sync",
-            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+            AsyncMock(return_value=MagicMock(empty_health_days=[], errors=None)),
         ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
         patch("mycoach.scheduler.jobs.async_session", test_session),
@@ -175,7 +175,7 @@ async def test_daily_briefing_body_records_failure() -> None:
     with (
         patch(
             "mycoach.scheduler.jobs._garmin_sync",
-            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+            AsyncMock(return_value=MagicMock(empty_health_days=[], errors=None)),
         ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=mock_engine),
         patch("mycoach.scheduler.jobs.async_session", test_session),
@@ -518,7 +518,7 @@ async def test_records_email_delivered_when_send_succeeds() -> None:
     with (
         patch(
             "mycoach.scheduler.jobs._garmin_sync",
-            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+            AsyncMock(return_value=MagicMock(empty_health_days=[], errors=None)),
         ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=_briefing_engine()),
         patch("mycoach.scheduler.jobs.async_session", test_session),
@@ -542,7 +542,7 @@ async def test_records_email_not_delivered_when_type_is_disabled() -> None:
     with (
         patch(
             "mycoach.scheduler.jobs._garmin_sync",
-            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+            AsyncMock(return_value=MagicMock(empty_health_days=[], errors=None)),
         ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=_briefing_engine()),
         patch("mycoach.scheduler.jobs.async_session", test_session),
@@ -563,7 +563,7 @@ async def test_rejected_send_fails_the_run_with_the_cause() -> None:
     with (
         patch(
             "mycoach.scheduler.jobs._garmin_sync",
-            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+            AsyncMock(return_value=MagicMock(empty_health_days=[], errors=None)),
         ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=_briefing_engine()),
         patch("mycoach.scheduler.jobs.async_session", test_session),
@@ -590,7 +590,7 @@ async def test_rejected_send_records_the_backend_reason() -> None:
     with (
         patch(
             "mycoach.scheduler.jobs._garmin_sync",
-            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+            AsyncMock(return_value=MagicMock(empty_health_days=[], errors=None)),
         ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=_briefing_engine()),
         patch("mycoach.scheduler.jobs.async_session", test_session),
@@ -619,7 +619,7 @@ async def test_unattempted_send_records_the_configuration_cause() -> None:
     with (
         patch(
             "mycoach.scheduler.jobs._garmin_sync",
-            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+            AsyncMock(return_value=MagicMock(empty_health_days=[], errors=None)),
         ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=_briefing_engine()),
         patch("mycoach.scheduler.jobs.async_session", test_session),
@@ -641,7 +641,7 @@ async def test_delivery_appears_in_the_structured_log_line(
     with (
         patch(
             "mycoach.scheduler.jobs._garmin_sync",
-            AsyncMock(return_value=MagicMock(empty_health_days=[])),
+            AsyncMock(return_value=MagicMock(empty_health_days=[], errors=None)),
         ),
         patch("mycoach.scheduler.jobs.CoachingEngine", return_value=_briefing_engine()),
         patch("mycoach.scheduler.jobs.async_session", test_session),

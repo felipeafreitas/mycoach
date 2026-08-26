@@ -1,7 +1,7 @@
 """Tests for Garmin source: mappers, source orchestration, and sync endpoint."""
 
 import logging
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -845,3 +845,40 @@ class TestSnapshotHasData:
         )
         assert snapshot.steps == 0
         assert snapshot_has_data(snapshot) is True
+
+
+class TestLastDeviceUpload:
+    """When the watch last reached Garmin — the one fact an alert can act on."""
+
+    def test_reads_the_upload_time_as_epoch_milliseconds(self) -> None:
+        client = MagicMock()
+        client.get_device_last_used.return_value = {
+            "lastUsedDeviceUploadTime": 1755577764000,
+            "lastUsedDeviceName": "Forerunner 255 Music",
+        }
+        upload = GarminSource(client=client).get_last_device_upload()
+
+        assert upload is not None
+        assert upload.uploaded_at == datetime(2025, 8, 19, 4, 29, 24, tzinfo=UTC)
+        assert upload.device_name == "Forerunner 255 Music"
+
+    def test_returns_none_when_garmin_raises(self) -> None:
+        """This only decorates an alert already going out; losing it must not lose that."""
+        client = MagicMock()
+        client.get_device_last_used.side_effect = RuntimeError("401")
+        assert GarminSource(client=client).get_last_device_upload() is None
+
+    def test_returns_none_when_the_field_is_absent(self) -> None:
+        client = MagicMock()
+        client.get_device_last_used.return_value = {"lastUsedDeviceName": "Forerunner"}
+        assert GarminSource(client=client).get_last_device_upload() is None
+
+    def test_tolerates_a_device_with_no_name(self) -> None:
+        client = MagicMock()
+        client.get_device_last_used.return_value = {
+            "lastUsedDeviceUploadTime": 1755577764000
+        }
+        upload = GarminSource(client=client).get_last_device_upload()
+
+        assert upload is not None
+        assert upload.device_name is None
