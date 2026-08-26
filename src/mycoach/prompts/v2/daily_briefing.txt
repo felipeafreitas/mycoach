@@ -22,7 +22,8 @@ Respond with a JSON object matching this exact schema:
   "sleep_recommendation": "Recommended bedtime and sleep hygiene tips for tonight",
   "key_metrics": {{
     "body_battery": <number or null>,
-    "hrv_status": <number or null>,
+    "hrv_last_night_avg": <last night's average HRV in ms, a number, or null>,
+    "hrv_status_text": <the HRV status word as a string, e.g. "BALANCED", or null>,
     "sleep_score": <number or null>,
     "training_readiness": <number or null>,
     "resting_hr": <number or null>

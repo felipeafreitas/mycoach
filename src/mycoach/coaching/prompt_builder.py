@@ -102,7 +102,7 @@ def _format_health(snapshot: dict[str, Any]) -> str:
         "resting_hr": "Resting Heart Rate",
         "avg_hr": "Avg HR",
         "max_hr": "Max HR (all day)",
-        "hrv_status": "HRV",
+        "hrv_status": "HRV last night avg (ms)",
         "hrv_7day_avg": "HRV 7-day avg",
         "sleep_duration_minutes": "Sleep duration (min)",
         "sleep_score": "Sleep score",
@@ -990,7 +990,7 @@ def _format_health_trends_averaged(averaged: dict[str, Any]) -> str:
     metric_labels = {
         "resting_hr": "Avg Resting HR",
         "avg_hr": "Avg HR",
-        "hrv_status": "Avg HRV",
+        "hrv_status": "Avg HRV (ms)",
         "sleep_duration_minutes": "Avg Sleep (min)",
         "sleep_score": "Avg Sleep Score",
         "avg_stress": "Avg Stress",

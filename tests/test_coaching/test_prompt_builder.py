@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from mycoach.coaching.prompt_builder import (
     _format_activities,
     _format_activity_detail,
@@ -245,6 +247,21 @@ class TestBuildDailyBriefingPrompt:
         assert "Sleep score: 82" in prompt
         assert "Push Day" in prompt
         assert "readiness_verdict" in prompt
+
+    @pytest.mark.parametrize("version", ["v1", "v2"])
+    def test_hrv_output_fields_are_unambiguous(self, version: str) -> None:
+        """The response schema must not ask for a number in a field named `hrv_status`,
+        which is what makes the model answer 'BALANCED' and lose the briefing."""
+        prompt = build_daily_briefing_prompt(
+            health_today={"hrv_status": 82.0, "hrv_status_text": "BALANCED"},
+            health_trends=[],
+            recent_activities=[],
+            version=version,
+        )
+        schema = prompt.split("key_metrics", 1)[1]
+        assert "hrv_last_night_avg" in schema
+        assert "hrv_status_text" in schema
+        assert '"hrv_status"' not in schema
 
     def test_no_data(self) -> None:
         prompt = build_daily_briefing_prompt(
