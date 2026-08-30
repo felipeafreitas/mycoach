@@ -415,6 +415,7 @@
             ]);
         } else {
             setActionbar([
+                el("button", { class: "iconbtn", "aria-label": "Cancel session", onclick: function () { confirmCancel(s); } }, ["✕"]),
                 el("button", { class: "btn btn--ghost", onclick: function () { openAddExercise(s); } }, ["＋ Exercise"]),
                 el("button", { class: "btn btn--primary", style: "flex:2", onclick: function () { finishSession(s); } }, ["Finish"]),
             ]);
@@ -461,6 +462,14 @@
             toast("Session saved");
             syncNow(false);
         });
+    }
+
+    function confirmCancel(s) {
+        openSheet("Discard this session?", [
+            el("p", { class: "sub", style: "margin-bottom:16px", text: "This is unrecoverable — nothing is kept, and nothing syncs to MyCoach." }),
+            el("button", { class: "btn btn--danger btn--block", onclick: function () { releaseWakeLock(); delSession(s.id).then(function () { closeSheet(); render(); toast("Session discarded"); }); } }, ["Discard session"]),
+            el("button", { class: "btn btn--ghost btn--block", style: "margin-top:8px", onclick: closeSheet }, ["Keep going"]),
+        ]);
     }
 
     function confirmDelete(s) {
