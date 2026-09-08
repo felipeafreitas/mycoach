@@ -77,6 +77,36 @@
     function getMeta(k) { return tx("meta", "readonly").then(function (s) { return reqP(s.get(k)); }).then(function (r) { return r ? r.value : null; }); }
     function setMeta(k, v) { return tx("meta", "readwrite").then(function (s) { return reqP(s.put({ key: k, value: v })); }); }
 
+    // ── Deferred writes ─────────────────────────────────────────────
+    /* Inline set entry has no Save button: the row *is* the record, so every
+       keystroke is a potential write. Typing debounces — a typed set survives
+       the app being killed 250ms after the last keystroke — while anything
+       structural (a set added, deleted, retyped) writes at once. The queue
+       holds the live session object, never a copy, so a late flush can never
+       write a stale value. */
+    var PERSIST_DEBOUNCE_MS = 250;
+    var pendingSession = null;
+    var persistTimer = null;
+
+    function schedulePersist(s) {
+        pendingSession = s;
+        if (persistTimer) return;
+        persistTimer = setTimeout(function () { persistTimer = null; flushPersist(); }, PERSIST_DEBOUNCE_MS);
+    }
+    function flushPersist() {
+        if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+        var s = pendingSession;
+        pendingSession = null;
+        return s ? putSession(s) : Promise.resolve();
+    }
+    function persistNow(s) { pendingSession = s; return flushPersist(); }
+    /* Drop queued writes for a session about to be deleted, so a stray flush
+       cannot resurrect it after delSession. */
+    function dropPersist() {
+        if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+        pendingSession = null;
+    }
+
     // ── State ───────────────────────────────────────────────────────
     var state = { activeId: null, exerciseCache: [], routine: null };
 
@@ -384,7 +414,7 @@
         view.innerHTML = "";
 
         view.appendChild(
-            el("button", { class: "iconbtn", style: "margin:18px 0 4px;margin-left:-8px", onclick: function () { render(); } }, ["‹ Back"])
+            el("button", { class: "iconbtn", style: "margin:18px 0 4px;margin-left:-8px", onclick: function () { flushPersist().then(function () { render(); }); } }, ["‹ Back"])
         );
 
         if (ro) {
@@ -393,7 +423,7 @@
         } else {
             var titleInput = el("input", {
                 class: "input", value: s.title, "aria-label": "Session title",
-                onchange: function (e) { s.title = e.target.value.trim() || "Session"; putSession(s); },
+                onchange: function (e) { s.title = e.target.value.trim() || "Session"; persistNow(s); },
             });
             view.appendChild(el("div", { class: "field", style: "margin-top:8px" }, [titleInput]));
             view.appendChild(el("p", { class: "sub faint", style: "font-size:13px", text: fmtTime(s.start_time) }));
@@ -422,42 +452,187 @@
         }
     }
 
-    function exerciseCard(s, ex, exIdx, ro) {
+    function exerciseMeta(ex) {
         var meta = ex.sets.length + (ex.sets.length === 1 ? " set" : " sets");
         if (ex.target_sets) meta += "  ·  Target " + ex.target_sets + " × " + ex.rep_range;
+        return meta;
+    }
+
+    function cardFor(exIdx) { return $("view").querySelector('.card[data-ex="' + exIdx + '"]'); }
+
+    function exerciseCard(s, ex, exIdx, ro) {
         var head = el("div", { class: "card__head" }, [
             el("div", {}, [
                 el("p", { class: "exercise-title", text: ex.title }),
-                el("div", { class: "exercise-meta", text: meta }),
+                el("div", { class: "exercise-meta", text: exerciseMeta(ex) }),
             ]),
-            ro ? null : el("button", { class: "iconbtn", onclick: function () { ex.remove = true; s.exercises.splice(exIdx, 1); putSession(s).then(function () { renderSession(s); }); } }, ["Remove"]),
+            ro ? null : el("button", { class: "iconbtn", onclick: function () {
+                var i = s.exercises.indexOf(ex);
+                if (i >= 0) s.exercises.splice(i, 1);
+                persistNow(s).then(function () { renderSession(s); });
+            } }, ["Remove"]),
         ]);
-        var card = el("div", { class: "card" }, [head]);
+        var sets = el("div", { class: "card__sets" });
+        var card = el("div", { class: "card", "data-ex": exIdx }, [head, sets]);
 
+        // Hidden by CSS until a row follows it, so an empty card stays quiet.
+        if (!ro) sets.appendChild(setHeadRow());
         ex.sets.forEach(function (set, i) {
-            var w = set.weight_kg != null ? set.weight_kg : "—";
-            var reps = set.reps != null ? set.reps : "—";
-            var row = el("div", { class: "setrow" }, [
-                el("span", { class: "setrow__idx", text: String(i + 1) }),
-                el("span", { class: "setrow__val", html: w + '<small>&nbsp;kg</small>' }),
-                el("span", { class: "setrow__val", html: reps + '<small>&nbsp;reps</small>' }),
-                el("span", { class: "setrow__type setrow__type--" + (set.set_type || "normal"), text: set.rpe != null ? "RPE " + set.rpe : (set.set_type !== "normal" ? set.set_type : "") }),
-                ro ? el("span", {}) : el("button", { class: "iconbtn", "aria-label": "Delete set", onclick: function () { ex.sets.splice(i, 1); putSession(s).then(function () { renderSession(s); }); } }, ["✕"]),
-            ]);
-            card.appendChild(row);
+            sets.appendChild(ro ? readSetRow(set, i) : editSetRow(s, ex, card, set));
         });
 
         if (!ro) {
+            refreshBadges(card, ex);
             card.appendChild(
-                el("button", { class: "btn btn--sm btn--ghost", style: "margin-top:12px", onclick: function () { openAddSet(s, ex); } }, ["＋ Add set"])
+                el("button", { class: "btn btn--sm btn--ghost", style: "margin-top:12px", onclick: function () { addSet(s, ex, card); } }, ["＋ Add set"])
             );
         }
         return card;
     }
 
+    function setHeadRow() {
+        return el("div", { class: "setrow setrow--edit setrow--head" }, [
+            el("span", {}),
+            el("span", { text: "kg" }),
+            el("span", { text: "reps" }),
+            el("span", { text: "rpe" }),
+            el("span", {}),
+        ]);
+    }
+
+    /* A synced session is read-only: values render as text, as they always did. */
+    function readSetRow(set, i) {
+        var w = set.weight_kg != null ? set.weight_kg : "—";
+        var reps = set.reps != null ? set.reps : "—";
+        return el("div", { class: "setrow" }, [
+            el("span", { class: "setrow__idx", text: String(i + 1) }),
+            el("span", { class: "setrow__val", html: w + '<small>&nbsp;kg</small>' }),
+            el("span", { class: "setrow__val", html: reps + '<small>&nbsp;reps</small>' }),
+            el("span", { class: "setrow__type setrow__type--" + (set.set_type || "normal"), text: set.rpe != null ? "RPE " + set.rpe : (set.set_type !== "normal" ? set.set_type : "") }),
+            el("span", {}),
+        ]);
+    }
+
+    function numOrNull(raw, parse) {
+        if (raw === "") return null;
+        var n = parse(raw);
+        return isNaN(n) ? null : n;
+    }
+
+    /* One editable row. Values go straight onto the set object as they are
+       typed, so there is nothing to save and nothing to lose. Nothing in here
+       re-renders: a re-render mid-keystroke would destroy the focus, the caret
+       and the scroll position, which is the whole difficulty of this screen.
+       Structural changes patch the DOM in place instead (see refreshBadges). */
+    function editSetRow(s, ex, card, set) {
+        var badge = el("button", { class: "setrow__badge", "aria-label": "Set type", onclick: function () { openSetType(s, ex, set, card); } });
+
+        function cell(props, apply) {
+            var input = el("input", props);
+            input.addEventListener("input", function () { apply(input.value); schedulePersist(s); });
+            input.addEventListener("change", function () { apply(input.value); flushPersist(); });
+            input.addEventListener("blur", function () { flushPersist(); });
+            input.addEventListener("focus", function () { keepRowVisible(row); });
+            return input;
+        }
+
+        var weight = cell(
+            { class: "input input--cell mono", type: "number", inputmode: "decimal", step: "0.5", min: "0", placeholder: "—", "aria-label": "Weight in kg", value: set.weight_kg != null ? set.weight_kg : "" },
+            function (v) { set.weight_kg = numOrNull(v, parseFloat); }
+        );
+        var reps = cell(
+            { class: "input input--cell mono", type: "number", inputmode: "numeric", min: "0", placeholder: "—", "aria-label": "Reps", value: set.reps != null ? set.reps : "" },
+            function (v) { set.reps = numOrNull(v, function (x) { return parseInt(x, 10); }); }
+        );
+        var rpe = cell(
+            { class: "input input--cell mono", type: "number", inputmode: "decimal", step: "0.5", min: "1", max: "10", placeholder: "—", "aria-label": "RPE", value: set.rpe != null ? set.rpe : "" },
+            function (v) { set.rpe = numOrNull(v, parseFloat); }
+        );
+
+        var row = el("div", { class: "setrow setrow--edit" }, [
+            badge, weight, reps, rpe,
+            el("button", { class: "iconbtn setrow__del", "aria-label": "Delete set", onclick: function () { removeSet(s, ex, card, set, row); } }, ["✕"]),
+        ]);
+        return row;
+    }
+
+    /* Set type is rare enough to hide behind the set number: the badge shows
+       the index for a normal set and an initial for anything else, and is the
+       control that changes it. Badges carry the index, so every structural
+       change restamps them — along with the card's set count. */
+    var SET_TYPE_INITIAL = { warmup: "W", dropset: "D", failure: "F" };
+
+    function refreshBadges(card, ex) {
+        var badges = card.querySelectorAll(".setrow:not(.setrow--head) .setrow__badge");
+        ex.sets.forEach(function (set, i) {
+            if (!badges[i]) return;
+            var type = set.set_type || "normal";
+            badges[i].textContent = SET_TYPE_INITIAL[type] || String(i + 1);
+            badges[i].className = "setrow__badge setrow__badge--" + type;
+        });
+        card.querySelector(".exercise-meta").textContent = exerciseMeta(ex);
+    }
+
+    /* Prefill carried over from the old add-set sheet: the previous set's
+       weight and reps, else the bottom of the prescribed rep range. The
+       difference is that the prefill is now stored the moment the row appears
+       — an untouched row is a logged set, not a discarded draft. */
+    function addSet(s, ex, card) {
+        var prev = ex.sets.length ? ex.sets[ex.sets.length - 1] : null;
+        var set = {
+            weight_kg: prev && prev.weight_kg != null ? prev.weight_kg : null,
+            reps: prev && prev.reps != null ? prev.reps : (!prev ? repRangeLowerBound(ex.rep_range) : null),
+            rpe: null,
+            set_type: "normal",
+        };
+        ex.sets.push(set);
+        var row = editSetRow(s, ex, card, set);
+        card.querySelector(".card__sets").appendChild(row);
+        refreshBadges(card, ex);
+        persistNow(s);
+        var weight = row.querySelector("input");
+        weight.focus();
+        keepRowVisible(row);
+    }
+
+    function removeSet(s, ex, card, set, row) {
+        var i = ex.sets.indexOf(set);
+        if (i >= 0) ex.sets.splice(i, 1);
+        row.remove();
+        refreshBadges(card, ex);
+        persistNow(s);
+    }
+
+    function openSetType(s, ex, set, card) {
+        var current = set.set_type || "normal";
+        openSheet("Set type", SET_TYPES.map(function (t) {
+            return el("button", {
+                class: "btn btn--block " + (t === current ? "btn--primary" : "btn--ghost"),
+                style: "margin-top:8px;text-transform:capitalize",
+                onclick: function () { set.set_type = t; closeSheet(); refreshBadges(card, ex); persistNow(s); },
+            }, [t]);
+        }));
+    }
+
+    /* iOS raises the keyboard over the bottom of the screen only after focus
+       lands, so centring the row has to wait for it; `scroll-margin` on the
+       row keeps the action bar off it. */
+    function keepRowVisible(row) {
+        setTimeout(function () {
+            if (row.isConnected && row.scrollIntoView) row.scrollIntoView({ block: "center", behavior: "smooth" });
+        }, 220);
+    }
+
     function finishSession(s) {
+        /* Rows appear prefilled and are stored immediately, so a tapped-then-
+           abandoned row is a set with nothing in it. It is not data — and a
+           null weight *and* null reps would poison the 1RM estimates the
+           coaching prompts read — so it is dropped rather than synced. */
+        s.exercises.forEach(function (ex) {
+            ex.sets = ex.sets.filter(function (set) { return set.weight_kg != null || set.reps != null; });
+        });
         s.end_time = new Date().toISOString();
-        putSession(s).then(function () {
+        persistNow(s).then(function () {
             render();
             toast("Session saved");
             syncNow(false);
@@ -467,7 +642,7 @@
     function confirmCancel(s) {
         openSheet("Discard this session?", [
             el("p", { class: "sub", style: "margin-bottom:16px", text: "This is unrecoverable — nothing is kept, and nothing syncs to MyCoach." }),
-            el("button", { class: "btn btn--danger btn--block", onclick: function () { releaseWakeLock(); delSession(s.id).then(function () { closeSheet(); render(); toast("Session discarded"); }); } }, ["Discard session"]),
+            el("button", { class: "btn btn--danger btn--block", onclick: function () { releaseWakeLock(); dropPersist(); delSession(s.id).then(function () { closeSheet(); render(); toast("Session discarded"); }); } }, ["Discard session"]),
             el("button", { class: "btn btn--ghost btn--block", style: "margin-top:8px", onclick: closeSheet }, ["Keep going"]),
         ]);
     }
@@ -480,7 +655,7 @@
         ]);
     }
 
-    // ── Sheets: add exercise / add set / settings ───────────────────
+    // ── Sheets: add exercise / set type / settings ──────────────────
     function openSheet(title, children) {
         closeSheet();
         var sheet = el("div", { class: "sheet" }, [el("h2", { class: "sheet__title", text: title })].concat(children));
@@ -500,56 +675,19 @@
         function add() {
             var title = input.value.trim();
             if (!title) return;
-            s.exercises.push({ title: title, notes: null, sets: [] });
-            putSession(s).then(function () { closeSheet(); renderSession(s); openAddSet(s, s.exercises[s.exercises.length - 1]); });
+            var ex = { title: title, notes: null, sets: [] };
+            s.exercises.push(ex);
+            persistNow(s).then(function () {
+                closeSheet();
+                renderSession(s);
+                addSet(s, ex, cardFor(s.exercises.length - 1));
+            });
         }
         openSheet("Add exercise", [
             el("div", { class: "field" }, [datalist, input]),
             el("button", { class: "btn btn--primary btn--block", onclick: add }, ["Add exercise"]),
         ]);
         setTimeout(function () { input.focus(); }, 50);
-    }
-
-    function openAddSet(s, ex) {
-        var prev = ex.sets.length ? ex.sets[ex.sets.length - 1] : null;
-        var repsDefault = prev && prev.reps != null ? prev.reps : (!prev ? repRangeLowerBound(ex.rep_range) : null);
-        var weight = el("input", { class: "input mono", type: "number", inputmode: "decimal", step: "0.5", min: "0", placeholder: "kg", value: prev && prev.weight_kg != null ? prev.weight_kg : "" });
-        var reps = el("input", { class: "input mono", type: "number", inputmode: "numeric", min: "0", placeholder: "reps", value: repsDefault != null ? repsDefault : "" });
-        var rpe = el("input", { class: "input mono", type: "number", inputmode: "decimal", step: "0.5", min: "1", max: "10", placeholder: "RPE (optional)" });
-        var chosenType = "normal";
-        var segButtons = SET_TYPES.map(function (t) {
-            return el("button", { type: "button", "aria-pressed": t === "normal" ? "true" : "false", onclick: function () {
-                chosenType = t;
-                seg.querySelectorAll("button").forEach(function (b) { b.setAttribute("aria-pressed", "false"); });
-                this.setAttribute("aria-pressed", "true");
-            }, text: t });
-        });
-        var seg = el("div", { class: "seg" }, segButtons);
-
-        function add(keepOpen) {
-            var wv = weight.value !== "" ? parseFloat(weight.value) : null;
-            var rv = reps.value !== "" ? parseInt(reps.value, 10) : null;
-            var pv = rpe.value !== "" ? parseFloat(rpe.value) : null;
-            if (rv == null && wv == null) { toast("Enter a weight or reps", "err"); return; }
-            ex.sets.push({ weight_kg: wv, reps: rv, rpe: pv, set_type: chosenType });
-            putSession(s).then(function () {
-                if (keepOpen) { renderSession(s); openAddSet(s, ex); }
-                else { closeSheet(); renderSession(s); }
-            });
-        }
-        openSheet("Add set · " + ex.title, [
-            el("div", { class: "row" }, [
-                el("div", { class: "field", style: "margin:0" }, [el("label", { text: "Weight" }), weight]),
-                el("div", { class: "field", style: "margin:0" }, [el("label", { text: "Reps" }), reps]),
-            ]),
-            el("div", { class: "field", style: "margin-top:14px" }, [el("label", { text: "RPE" }), rpe]),
-            el("div", { class: "field" }, [el("label", { text: "Set type" }), seg]),
-            el("div", { class: "row" }, [
-                el("button", { class: "btn btn--ghost", onclick: function () { add(true); } }, ["Save + add"]),
-                el("button", { class: "btn btn--primary", onclick: function () { add(false); } }, ["Save set"]),
-            ]),
-        ]);
-        setTimeout(function () { weight.focus(); }, 50);
     }
 
     function openSettings() {
@@ -587,10 +725,12 @@
     $("sync-chip").addEventListener("click", function () { syncNow(true); });
     window.addEventListener("online", function () { refreshChip(); syncNow(false); pullRoutine(); });
     window.addEventListener("offline", refreshChip);
+    // A swipe-away kill does not always fire visibilitychange first.
+    window.addEventListener("pagehide", function () { flushPersist(); });
     document.addEventListener("visibilitychange", function () {
         // Walking back into LAN range and reopening the tab should retry
         // without waiting for the next manual sync press.
-        if (document.visibilityState !== "visible") return;
+        if (document.visibilityState !== "visible") { flushPersist(); return; }
         syncNow(false);
         // iOS silently drops the lock when the tab backgrounds.
         if (wakeWanted) acquireWakeLock();

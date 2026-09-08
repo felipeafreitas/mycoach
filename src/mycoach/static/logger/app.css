@@ -213,6 +213,52 @@ h1.screen-title {
 .setrow__type--warmup { color: var(--pending); }
 .setrow__type--dropset, .setrow__type--failure { color: var(--accent-soft); }
 
+/* editable set rows — the row is the input, there is no save step */
+.setrow--edit {
+    grid-template-columns: 34px 1fr 1fr 58px 28px;
+    padding: 5px 0;
+    /* clears the fixed action bar when a focused row is scrolled into view */
+    scroll-margin: 96px 0 128px;
+}
+/* The column labels only earn their space once a row follows them. */
+.card__sets > .setrow--head:last-child { display: none; }
+.setrow--head {
+    padding: 6px 0 2px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--faint);
+    font-family: var(--sans);
+    text-align: center;
+}
+/* The set number doubles as the set-type control (tap it), so type is visible
+   at a glance without spending a column on it. */
+.setrow__badge {
+    min-height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--faint);
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+}
+.setrow__badge--warmup { color: var(--pending); }
+.setrow__badge--dropset, .setrow__badge--failure { color: var(--accent-soft); }
+.input--cell {
+    padding: 10px 4px;
+    min-height: 44px;
+    border-radius: 9px;
+    text-align: center;
+}
+/* Native number spinners steal width the value needs on a phone. */
+.input--cell::-webkit-outer-spin-button,
+.input--cell::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.input--cell[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.setrow__del { padding: 0; font-size: 12px; min-height: 44px; }
+
 /* session history rows */
 .session-row {
     display: flex;
