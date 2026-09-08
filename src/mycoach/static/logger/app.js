@@ -148,6 +148,8 @@
                     weight_kg: set.weight_kg,
                     reps: set.reps,
                     rpe: set.rpe,
+                    prescribed_weight_kg: set.prescribed_weight_kg != null ? set.prescribed_weight_kg : null,
+                    prescribed_reps: set.prescribed_reps != null ? set.prescribed_reps : null,
                 });
             });
         });

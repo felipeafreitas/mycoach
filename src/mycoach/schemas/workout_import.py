@@ -25,6 +25,8 @@ class WorkoutSetIn(BaseModel):
     distance_meters: float | None = Field(default=None, ge=0)
     duration_seconds: int | None = Field(default=None, ge=0)
     rpe: float | None = Field(default=None, ge=1, le=10)
+    prescribed_weight_kg: float | None = Field(default=None, ge=0)
+    prescribed_reps: int | None = Field(default=None, ge=0)
 
     def to_dataclass(self) -> WorkoutSetImport:
         return WorkoutSetImport(
@@ -38,6 +40,8 @@ class WorkoutSetIn(BaseModel):
             distance_meters=self.distance_meters,
             duration_seconds=self.duration_seconds,
             rpe=self.rpe,
+            prescribed_weight_kg=self.prescribed_weight_kg,
+            prescribed_reps=self.prescribed_reps,
         )
 
 
