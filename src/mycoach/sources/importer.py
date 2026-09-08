@@ -108,6 +108,8 @@ async def import_workouts(
                     distance_meters=s.distance_meters,
                     duration_seconds=s.duration_seconds,
                     rpe=s.rpe,
+                    prescribed_weight_kg=s.prescribed_weight_kg,
+                    prescribed_reps=s.prescribed_reps,
                 )
             )
 

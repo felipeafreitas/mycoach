@@ -69,3 +69,8 @@ class GymWorkoutDetail(Base):
     distance_meters: Mapped[float | None] = mapped_column(Float, default=None)
     duration_seconds: Mapped[int | None] = mapped_column(default=None)
     rpe: Mapped[float | None] = mapped_column(Float, default=None)
+    # What the plan called for on this set, alongside what was actually done —
+    # avoids re-deriving the comparison by matching exercise_title against
+    # PlannedSession.details. Null for manually logged sets and sets with no plan.
+    prescribed_weight_kg: Mapped[float | None] = mapped_column(Float, default=None)
+    prescribed_reps: Mapped[int | None] = mapped_column(default=None)

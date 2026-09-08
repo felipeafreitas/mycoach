@@ -25,6 +25,8 @@ class WorkoutSetImport:
     distance_meters: float | None = None
     duration_seconds: int | None = None
     rpe: float | None = None
+    prescribed_weight_kg: float | None = None
+    prescribed_reps: int | None = None
 
 
 @dataclass

@@ -16,6 +16,7 @@ from mycoach.schemas.plan import PlannedSessionCreate, WeeklyPlanCreate
 from mycoach.schemas.sport_profile import SportProfileCreate, SportProfileUpdate
 from mycoach.schemas.system import StatusResponse
 from mycoach.schemas.user import UserCreate, UserRead, UserUpdate
+from mycoach.schemas.workout_import import WorkoutSetIn
 
 
 class TestUserSchemas:
@@ -195,6 +196,45 @@ class TestActivitySchemas:
     def test_invalid_rpe(self) -> None:
         with pytest.raises(ValidationError):
             GymWorkoutDetailCreate(exercise_title="Squat", set_index=1, rpe=11.0)
+
+    def test_gym_detail_carries_prescribed_alongside_performed(self) -> None:
+        d = GymWorkoutDetailCreate(
+            exercise_title="Squat",
+            set_index=1,
+            weight_kg=100.0,
+            reps=5,
+            prescribed_weight_kg=102.5,
+            prescribed_reps=5,
+        )
+        assert d.prescribed_weight_kg == 102.5
+        assert d.prescribed_reps == 5
+
+    def test_gym_detail_prescribed_defaults_to_none(self) -> None:
+        d = GymWorkoutDetailCreate(exercise_title="Squat", set_index=1)
+        assert d.prescribed_weight_kg is None
+        assert d.prescribed_reps is None
+
+
+class TestWorkoutImportSchemas:
+    def test_set_in_carries_prescribed_through_to_dataclass(self) -> None:
+        """The wire schema forwards a prescription into the canonical import dataclass."""
+        s = WorkoutSetIn(
+            exercise_title="Bench Press",
+            set_index=1,
+            weight_kg=80.0,
+            reps=8,
+            prescribed_weight_kg=82.5,
+            prescribed_reps=6,
+        )
+        imported = s.to_dataclass()
+        assert imported.prescribed_weight_kg == 82.5
+        assert imported.prescribed_reps == 6
+
+    def test_set_in_prescribed_defaults_to_none(self) -> None:
+        s = WorkoutSetIn(exercise_title="Bench Press", set_index=1)
+        imported = s.to_dataclass()
+        assert imported.prescribed_weight_kg is None
+        assert imported.prescribed_reps is None
 
 
 class TestPlanSchemas:

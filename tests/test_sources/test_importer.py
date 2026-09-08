@@ -79,6 +79,43 @@ class TestImportWorkouts:
             assert count == 1
 
     @pytest.mark.asyncio
+    async def test_persists_prescribed_alongside_performed(self, user: User) -> None:
+        """Set import: sets carrying a prescription land on GymWorkoutDetail."""
+        from tests.conftest import test_session
+
+        workout = WorkoutImport(
+            title="Push Day",
+            start_time=datetime(2024, 6, 10, 9, 0),
+            sets=[
+                WorkoutSetImport(
+                    exercise_title="Bench Press",
+                    set_index=1,
+                    weight_kg=80,
+                    reps=8,
+                    prescribed_weight_kg=82.5,
+                    prescribed_reps=6,
+                ),
+                WorkoutSetImport(exercise_title="Bench Press", set_index=2, weight_kg=80, reps=7),
+            ],
+        )
+
+        async with test_session() as session:
+            await import_workouts(session, user.id, [workout], source="logger")
+            await session.commit()
+
+        async with test_session() as session:
+            details = (
+                (await session.execute(select(GymWorkoutDetail).order_by(GymWorkoutDetail.set_index)))
+                .scalars()
+                .all()
+            )
+            assert details[0].prescribed_weight_kg == 82.5
+            assert details[0].prescribed_reps == 6
+            # An unprescribed set (manually logged, or no plan for the session) stays null.
+            assert details[1].prescribed_weight_kg is None
+            assert details[1].prescribed_reps is None
+
+    @pytest.mark.asyncio
     async def test_dedup_fallback_title_start_time(self, user: User) -> None:
         """With no external_id, dedup falls back to (title, start_time)."""
         from tests.conftest import test_session
