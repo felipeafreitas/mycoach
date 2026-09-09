@@ -461,8 +461,10 @@
     function cardFor(exIdx) { return $("view").querySelector('.card[data-ex="' + exIdx + '"]'); }
 
     function exerciseCard(s, ex, exIdx, ro) {
+        var handle = ro ? null : el("button", { class: "card__drag", type: "button", "aria-label": "Reorder exercise", tabindex: "-1" }, ["⠿"]);
         var head = el("div", { class: "card__head" }, [
-            el("div", {}, [
+            handle,
+            el("div", { class: "card__headmain" }, [
                 el("p", { class: "exercise-title", text: ex.title }),
                 el("div", { class: "exercise-meta", text: exerciseMeta(ex) }),
             ]),
@@ -474,6 +476,7 @@
         ]);
         var sets = el("div", { class: "card__sets" });
         var card = el("div", { class: "card", "data-ex": exIdx }, [head, sets]);
+        if (handle) enableReorder(handle, card, s);
 
         // Hidden by CSS until a row follows it, so an empty card stays quiet.
         if (!ro) sets.appendChild(setHeadRow());
@@ -612,6 +615,170 @@
                 onclick: function () { set.set_type = t; closeSheet(); refreshBadges(card, ex); persistNow(s); },
             }, [t]);
         }));
+    }
+
+    /* ── Drag to reorder exercises ──────────────────────────────────
+       HTML5 drag-and-drop never fires on touch, so this is built from
+       Pointer Events by hand. A drag begins only from the grip handle —
+       never the card body, which is now full of editable inputs (#49) —
+       and only once a short long-press (or a deliberate move) has armed
+       it, so a stray tap can't reorder. `touch-action: none` on the
+       handle keeps the browser from claiming the gesture as a scroll,
+       and the pointer is captured to the handle so events keep flowing
+       as the finger travels over other cards.
+
+       The lifted card is glued under the finger with a transform while
+       its siblings stay put; a fixed drop-line marks where it will land.
+       On release we splice `s.exercises` and persist — session-local,
+       never written back to the routine (#51) — then re-render, which is
+       safe here because a drop has no focus to lose. */
+    var LONG_PRESS_MS = 160;
+    var PRE_DRAG_SLOP = 8;   // a move past this on the handle arms the drag early
+    var EDGE_ZONE = 72;      // autoscroll when the finger nears a viewport edge
+    var EDGE_SPEED = 16;     // px per frame at the very edge
+    var drag = null;
+
+    function enableReorder(handle, card, s) {
+        handle.addEventListener("pointerdown", function (e) {
+            if (drag || (e.button != null && e.button > 0)) return;
+            e.preventDefault();
+            var pid = e.pointerId;
+            var startX = e.clientX, startY = e.clientY;
+            var pressTimer = setTimeout(function () { arm(startY); }, LONG_PRESS_MS);
+
+            function cleanup() {
+                if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+                handle.removeEventListener("pointermove", preMove);
+                handle.removeEventListener("pointerup", preEnd);
+                handle.removeEventListener("pointercancel", preEnd);
+            }
+            function arm(pointerY) {
+                cleanup();
+                beginDrag(s, card, handle, pid, pointerY);
+            }
+            function preMove(ev) {
+                if (ev.pointerId !== pid) return;
+                if (Math.abs(ev.clientY - startY) > PRE_DRAG_SLOP ||
+                    Math.abs(ev.clientX - startX) > PRE_DRAG_SLOP) arm(ev.clientY);
+            }
+            function preEnd(ev) {
+                if (ev.pointerId !== pid) return;
+                cleanup(); // released or cancelled before arming — it was a tap
+            }
+            handle.addEventListener("pointermove", preMove);
+            handle.addEventListener("pointerup", preEnd);
+            handle.addEventListener("pointercancel", preEnd);
+        });
+    }
+
+    function beginDrag(s, card, handle, pid, pointerY) {
+        flushPersist(); // a set typed a moment ago must be saved before we re-render
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        try { handle.setPointerCapture(pid); } catch (_) {}
+        var rect = card.getBoundingClientRect();
+        drag = {
+            s: s, card: card, handle: handle, pid: pid,
+            grabOffset: pointerY - rect.top,
+            pointerY: pointerY,
+            left: rect.left, width: rect.width,
+            translateY: 0, targetIdx: null,
+            line: el("div", { class: "drop-line" }),
+            rafId: null,
+        };
+        card.classList.add("card--dragging");
+        document.body.classList.add("reordering");
+        document.body.appendChild(drag.line);
+        handle.addEventListener("pointermove", onDragMove);
+        handle.addEventListener("pointerup", onDragUp);
+        handle.addEventListener("pointercancel", onDragCancel);
+        positionDrag(pointerY);
+        drag.rafId = requestAnimationFrame(autoscrollTick);
+    }
+
+    function onDragMove(e) {
+        if (!drag || e.pointerId !== drag.pid) return;
+        e.preventDefault();
+        drag.pointerY = e.clientY;
+        positionDrag(e.clientY);
+    }
+    function onDragUp(e) { if (drag && e.pointerId === drag.pid) { e.preventDefault(); endDrag(true); } }
+    function onDragCancel(e) { if (drag && e.pointerId === drag.pid) endDrag(false); }
+
+    /* Keep the lifted card's grabbed point under the finger (in viewport
+       coordinates, so it holds still while the list autoscrolls beneath it),
+       then recompute where it would drop. */
+    function positionDrag(pointerY) {
+        var card = drag.card;
+        var natTop = card.getBoundingClientRect().top - drag.translateY;
+        drag.translateY = (pointerY - drag.grabOffset) - natTop;
+        card.style.transform = "translateY(" + drag.translateY + "px)";
+        drag.targetIdx = targetIndex(pointerY);
+        positionLine(drag.targetIdx);
+    }
+
+    function otherCards() {
+        return Array.prototype.slice.call($("view").querySelectorAll(".card"))
+            .filter(function (c) { return c !== drag.card; });
+    }
+
+    /* Insertion index into s.exercises *with the dragged item removed*:
+       the count of other cards whose midpoint the finger has passed. */
+    function targetIndex(pointerY) {
+        var idx = 0;
+        otherCards().forEach(function (c) {
+            var r = c.getBoundingClientRect();
+            if (pointerY > r.top + r.height / 2) idx++;
+        });
+        return idx;
+    }
+
+    function positionLine(idx) {
+        var cards = otherCards();
+        if (!cards.length) { drag.line.style.display = "none"; return; }
+        var y;
+        if (idx >= cards.length) y = cards[cards.length - 1].getBoundingClientRect().bottom + 5;
+        else y = cards[idx].getBoundingClientRect().top - 7;
+        drag.line.style.display = "block";
+        drag.line.style.top = y + "px";
+        drag.line.style.left = drag.left + "px";
+        drag.line.style.width = drag.width + "px";
+    }
+
+    function autoscrollTick() {
+        if (!drag) return;
+        var y = drag.pointerY, vh = window.innerHeight, dy = 0;
+        if (y < EDGE_ZONE) dy = -EDGE_SPEED * (1 - y / EDGE_ZONE);
+        else if (y > vh - EDGE_ZONE) dy = EDGE_SPEED * (1 - (vh - y) / EDGE_ZONE);
+        if (dy) { window.scrollBy(0, dy); positionDrag(drag.pointerY); }
+        drag.rafId = requestAnimationFrame(autoscrollTick);
+    }
+
+    function endDrag(commit) {
+        var d = drag;
+        drag = null;
+        if (!d) return;
+        if (d.rafId) cancelAnimationFrame(d.rafId);
+        d.handle.removeEventListener("pointermove", onDragMove);
+        d.handle.removeEventListener("pointerup", onDragUp);
+        d.handle.removeEventListener("pointercancel", onDragCancel);
+        try { d.handle.releasePointerCapture(d.pid); } catch (_) {}
+        d.line.remove();
+        d.card.classList.remove("card--dragging");
+        d.card.style.transform = "";
+        document.body.classList.remove("reordering");
+
+        var s = d.s;
+        if (commit) {
+            var from = parseInt(d.card.getAttribute("data-ex"), 10);
+            var to = d.targetIdx != null ? d.targetIdx : from;
+            if (to !== from) {
+                var moved = s.exercises.splice(from, 1)[0];
+                if (moved) s.exercises.splice(to, 0, moved);
+                persistNow(s).then(function () { renderSession(s); });
+                return;
+            }
+        }
+        renderSession(s); // nothing moved (or cancelled) — rebuild to a clean state
     }
 
     /* iOS raises the keyboard over the bottom of the screen only after focus

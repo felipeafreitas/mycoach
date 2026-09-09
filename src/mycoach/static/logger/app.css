@@ -184,7 +184,49 @@ h1.screen-title {
     padding: 16px;
     margin-bottom: 12px;
 }
-.card__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.card__head { display: flex; align-items: flex-start; gap: 8px; }
+.card__headmain { flex: 1; min-width: 0; }
+
+/* Grip handle — the only place a reorder drag can start. `touch-action:
+   none` hands the gesture to our Pointer Events instead of the browser's
+   scroll. */
+.card__drag {
+    flex: none;
+    background: transparent;
+    border: none;
+    color: var(--faint);
+    font-size: 18px;
+    line-height: 1;
+    padding: 6px 6px 6px 2px;
+    margin-top: -2px;
+    touch-action: none;
+    cursor: grab;
+}
+.card__drag:active { cursor: grabbing; color: var(--muted); }
+
+/* The lifted card rides above its siblings, which stay put; a translate
+   keeps it under the finger (set inline by app.js). */
+.card--dragging {
+    position: relative;
+    z-index: 30;
+    opacity: 0.97;
+    border-color: var(--line-strong);
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
+    cursor: grabbing;
+    will-change: transform;
+}
+body.reordering { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+
+/* Where the lifted card will drop. Positioned in viewport coords. */
+.drop-line {
+    position: fixed;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 2px;
+    z-index: 25;
+    pointer-events: none;
+    box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.3);
+}
 
 .exercise-title { font-size: 17px; font-weight: 600; margin: 0; }
 .exercise-meta { font-size: 12px; color: var(--faint); font-family: var(--mono); margin-top: 2px; }
