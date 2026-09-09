@@ -880,14 +880,18 @@
         }, 220);
     }
 
-    function finishSession(s) {
-        /* Rows appear prefilled and are stored immediately, so a tapped-then-
-           abandoned row is a set with nothing in it. It is not data — and a
-           null weight *and* null reps would poison the 1RM estimates the
-           coaching prompts read — so it is dropped rather than synced. */
-        s.exercises.forEach(function (ex) {
+    /* Rows appear prefilled and are stored immediately, so a tapped-then-
+       abandoned row is a set with nothing in it. It is not data — and a
+       null weight *and* null reps would poison the 1RM estimates the
+       coaching prompts read — so it is dropped rather than synced. */
+    function pruneEmptySets(exercises) {
+        exercises.forEach(function (ex) {
             ex.sets = ex.sets.filter(function (set) { return set.weight_kg != null || set.reps != null; });
         });
+    }
+
+    function finishSession(s) {
+        pruneEmptySets(s.exercises);
         s.end_time = new Date().toISOString();
         persistNow(s).then(function () {
             render();
@@ -979,34 +983,44 @@
     }
 
     // ── Boot ────────────────────────────────────────────────────────
-    $("sync-chip").addEventListener("click", function () { syncNow(true); });
-    window.addEventListener("online", function () { refreshChip(); syncNow(false); pullRoutine(); });
-    window.addEventListener("offline", refreshChip);
-    // A swipe-away kill does not always fire visibilitychange first.
-    window.addEventListener("pagehide", function () { flushPersist(); });
-    document.addEventListener("visibilitychange", function () {
-        // Walking back into LAN range and reopening the tab should retry
-        // without waiting for the next manual sync press.
-        if (document.visibilityState !== "visible") { flushPersist(); return; }
-        syncNow(false);
-        // iOS silently drops the lock when the tab backgrounds.
-        if (wakeWanted) acquireWakeLock();
-    });
-
-    getMeta("exercises").then(function (list) { if (list) state.exerciseCache = list; });
-    getMeta("routine").then(function (r) {
-        state.routine = r;
-        if (state.activeId === null && !document.querySelector(".sheet-backdrop")) render();
-    });
-
-    if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/logger/sw.js", { scope: "/logger" }).catch(function (e) {
-            console.warn("[logger] SW registration failed:", e);
+    // Guarded so this file can also be `require()`d by node:test for its
+    // pure functions (see the export guard below), which has no DOM.
+    if (typeof document !== "undefined") {
+        $("sync-chip").addEventListener("click", function () { syncNow(true); });
+        window.addEventListener("online", function () { refreshChip(); syncNow(false); pullRoutine(); });
+        window.addEventListener("offline", refreshChip);
+        // A swipe-away kill does not always fire visibilitychange first.
+        window.addEventListener("pagehide", function () { flushPersist(); });
+        document.addEventListener("visibilitychange", function () {
+            // Walking back into LAN range and reopening the tab should retry
+            // without waiting for the next manual sync press.
+            if (document.visibilityState !== "visible") { flushPersist(); return; }
+            syncNow(false);
+            // iOS silently drops the lock when the tab backgrounds.
+            if (wakeWanted) acquireWakeLock();
         });
+
+        getMeta("exercises").then(function (list) { if (list) state.exerciseCache = list; });
+        getMeta("routine").then(function (r) {
+            state.routine = r;
+            if (state.activeId === null && !document.querySelector(".sheet-backdrop")) render();
+        });
+
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("/logger/sw.js", { scope: "/logger" }).catch(function (e) {
+                console.warn("[logger] SW registration failed:", e);
+            });
+        }
+
+        render();
+        pullExercises();
+        pullRoutine();
+        syncNow(false);
     }
 
-    render();
-    pullExercises();
-    pullRoutine();
-    syncNow(false);
+    /* Dev-only: exposes pure functions to node:test. `module` is undefined in
+       the browser, so this branch never runs there. */
+    if (typeof module !== "undefined" && module.exports) {
+        module.exports = { toPayload: toPayload, repRangeLowerBound: repRangeLowerBound, numOrNull: numOrNull, pruneEmptySets: pruneEmptySets };
+    }
 })();
