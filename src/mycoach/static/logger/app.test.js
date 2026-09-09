@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { repRangeLowerBound, numOrNull, toPayload, pruneEmptySets } = require("./app.js");
+const { repRangeLowerBound, numOrNull, toPayload, pruneEmptySets, topSetForExercise } = require("./app.js");
 
 test("repRangeLowerBound reads the lower bound of a range like '8-10'", () => {
     assert.equal(repRangeLowerBound("8-10"), 8);
@@ -85,4 +85,54 @@ test("pruneEmptySets drops sets with neither weight nor reps", () => {
 
     assert.equal(exercises[0].sets.length, 2);
     assert.deepEqual(exercises[0].sets.map((s) => s.reps), [5, 3]);
+});
+
+test("topSetForExercise picks the heaviest working set", () => {
+    const ex = {
+        sets: [
+            { weight_kg: 80, reps: 8, set_type: "normal" },
+            { weight_kg: 100, reps: 3, set_type: "normal" },
+            { weight_kg: 90, reps: 5, set_type: "normal" },
+        ],
+    };
+    assert.equal(topSetForExercise(ex), ex.sets[1]);
+});
+
+test("topSetForExercise breaks ties in favour of the first set reached", () => {
+    const ex = {
+        sets: [
+            { weight_kg: 100, reps: 5, set_type: "normal" },
+            { weight_kg: 100, reps: 4, set_type: "normal" },
+        ],
+    };
+    assert.equal(topSetForExercise(ex), ex.sets[0]);
+});
+
+test("topSetForExercise never picks a warmup set", () => {
+    const ex = {
+        sets: [
+            { weight_kg: 120, reps: 5, set_type: "warmup" },
+            { weight_kg: 100, reps: 5, set_type: "normal" },
+        ],
+    };
+    assert.equal(topSetForExercise(ex), ex.sets[1]);
+});
+
+test("topSetForExercise returns null when every set is a warmup", () => {
+    const ex = { sets: [{ weight_kg: 60, reps: 8, set_type: "warmup" }] };
+    assert.equal(topSetForExercise(ex), null);
+});
+
+test("topSetForExercise returns null with no sets at all", () => {
+    assert.equal(topSetForExercise({ sets: [] }), null);
+});
+
+test("topSetForExercise treats a bodyweight exercise's first working set as top", () => {
+    const ex = {
+        sets: [
+            { weight_kg: null, reps: 12, set_type: "normal" },
+            { weight_kg: null, reps: 10, set_type: "normal" },
+        ],
+    };
+    assert.equal(topSetForExercise(ex), ex.sets[0]);
 });
