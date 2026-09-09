@@ -437,6 +437,7 @@
         }
         s.exercises.forEach(function (ex, exIdx) {
             view.appendChild(exerciseCard(s, ex, exIdx, ro));
+            if (!ro && exIdx < s.exercises.length - 1) view.appendChild(linkToggle(s, exIdx));
         });
 
         // Action bar
@@ -462,22 +463,108 @@
 
     function cardFor(exIdx) { return $("view").querySelector('.card[data-ex="' + exIdx + '"]'); }
 
+    // ── Ad-hoc supersets ────────────────────────────────────────────
+    /* superset_group is a session-local integer. The one invariant every
+       mutation here has to preserve: members of a group are always a
+       contiguous run in s.exercises. That's what lets "linked with next"
+       stand in for "same superset" without re-deriving anything, and it's
+       why a reorder that interleaves a run has to break the group outright
+       (see repairGroupsAfterReorder) rather than guess which half survives. */
+    function linkedWithNext(s, idx) {
+        var a = s.exercises[idx], b = s.exercises[idx + 1];
+        return !!b && a.superset_group != null && a.superset_group === b.superset_group;
+    }
+    function nextGroupId(s) {
+        var max = 0;
+        s.exercises.forEach(function (ex) { if (ex.superset_group != null && ex.superset_group > max) max = ex.superset_group; });
+        return max + 1;
+    }
+    function groupRun(s, idx) {
+        var g = s.exercises[idx].superset_group;
+        if (g == null) return [idx, idx];
+        var start = idx, end = idx;
+        while (start > 0 && s.exercises[start - 1].superset_group === g) start--;
+        while (end < s.exercises.length - 1 && s.exercises[end + 1].superset_group === g) end++;
+        return [start, end];
+    }
+    /* A run that's shrunk to one exercise isn't a superset any more. */
+    function normalizeGroups(s) {
+        var i = 0;
+        while (i < s.exercises.length) {
+            var run = groupRun(s, i);
+            if (s.exercises[i].superset_group != null && run[1] === run[0]) s.exercises[i].superset_group = null;
+            i = run[1] + 1;
+        }
+    }
+    function toggleLink(s, exIdx) {
+        if (linkedWithNext(s, exIdx)) {
+            // Unlink: the back half of the run peels off under a fresh id.
+            var run = groupRun(s, exIdx);
+            var freshGroup = nextGroupId(s);
+            for (var i = exIdx + 1; i <= run[1]; i++) s.exercises[i].superset_group = freshGroup;
+        } else {
+            var runA = groupRun(s, exIdx);
+            var runB = groupRun(s, exIdx + 1);
+            var group = s.exercises[exIdx].superset_group != null ? s.exercises[exIdx].superset_group
+                : (s.exercises[exIdx + 1].superset_group != null ? s.exercises[exIdx + 1].superset_group : nextGroupId(s));
+            for (var j = runA[0]; j <= runB[1]; j++) s.exercises[j].superset_group = group;
+        }
+        normalizeGroups(s);
+        persistNow(s).then(function () { renderSession(s); });
+    }
+    /* A reorder can pull a third exercise into the middle of a run, or tear
+       a run apart. Either way the run stops being contiguous, which a
+       superset_group is never allowed to be — so the group breaks outright
+       instead of silently keeping whichever half looks contiguous. */
+    function repairGroupsAfterReorder(s) {
+        var byGroup = {};
+        s.exercises.forEach(function (ex, i) {
+            if (ex.superset_group == null) return;
+            (byGroup[ex.superset_group] = byGroup[ex.superset_group] || []).push(i);
+        });
+        var broken = false;
+        Object.keys(byGroup).forEach(function (g) {
+            var idxs = byGroup[g];
+            var contiguous = idxs.every(function (idx, k) { return k === 0 || idx === idxs[k - 1] + 1; });
+            if (!contiguous) {
+                broken = true;
+                idxs.forEach(function (idx) { s.exercises[idx].superset_group = null; });
+            }
+        });
+        return broken;
+    }
+    function linkToggle(s, idx) {
+        var linked = linkedWithNext(s, idx);
+        return el("button", {
+            class: "link-toggle" + (linked ? " link-toggle--linked" : ""),
+            onclick: function () { toggleLink(s, idx); },
+        }, [linked ? "🔗 Unlink superset" : "🔗 Link as superset"]);
+    }
+
     function exerciseCard(s, ex, exIdx, ro) {
+        var joinedAbove = exIdx > 0 && linkedWithNext(s, exIdx - 1);
+        var joinedBelow = linkedWithNext(s, exIdx);
+        var cardClass = "card" + (joinedAbove ? " card--joined-above" : "") + (joinedBelow ? " card--joined-below" : "");
+
         var handle = ro ? null : el("button", { class: "card__drag", type: "button", "aria-label": "Reorder exercise", tabindex: "-1" }, ["⠿"]);
         var head = el("div", { class: "card__head" }, [
             handle,
             el("div", { class: "card__headmain" }, [
-                el("p", { class: "exercise-title", text: ex.title }),
+                el("p", { class: "exercise-title" }, [
+                    ex.title,
+                    ex.superset_group != null ? el("span", { class: "superset-badge", text: "Superset" }) : null,
+                ]),
                 el("div", { class: "exercise-meta", text: exerciseMeta(ex) }),
             ]),
             ro ? null : el("button", { class: "iconbtn", onclick: function () {
                 var i = s.exercises.indexOf(ex);
                 if (i >= 0) s.exercises.splice(i, 1);
+                normalizeGroups(s);
                 persistNow(s).then(function () { renderSession(s); });
             } }, ["Remove"]),
         ]);
         var sets = el("div", { class: "card__sets" });
-        var card = el("div", { class: "card", "data-ex": exIdx }, [head, sets]);
+        var card = el("div", { class: cardClass, "data-ex": exIdx }, [head, sets]);
         if (handle) enableReorder(handle, card, s);
 
         // Hidden by CSS until a row follows it, so an empty card stays quiet.
@@ -776,6 +863,7 @@
             if (to !== from) {
                 var moved = s.exercises.splice(from, 1)[0];
                 if (moved) s.exercises.splice(to, 0, moved);
+                if (repairGroupsAfterReorder(s)) toast("Superset broken by reorder");
                 persistNow(s).then(function () { renderSession(s); });
                 return;
             }
@@ -844,7 +932,7 @@
         function add() {
             var title = input.value.trim();
             if (!title) return;
-            var ex = { title: title, notes: null, sets: [] };
+            var ex = { title: title, notes: null, sets: [], superset_group: null };
             s.exercises.push(ex);
             persistNow(s).then(function () {
                 closeSheet();

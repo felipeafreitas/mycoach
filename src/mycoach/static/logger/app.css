@@ -228,6 +228,41 @@ body.reordering { user-select: none; -webkit-user-select: none; cursor: grabbing
     box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.3);
 }
 
+/* Ad-hoc supersets: two joined cards read as one block, with the toggle
+   that made them so sitting flush in the seam. */
+.card--joined-below { margin-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom-color: var(--line-strong); }
+.card--joined-above { border-top-left-radius: 0; border-top-right-radius: 0; }
+.link-toggle {
+    display: block;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--faint);
+    font-size: 12px;
+    padding: 6px 0;
+    margin: -4px 0 12px;
+    text-align: center;
+    cursor: pointer;
+}
+.link-toggle--linked {
+    color: var(--accent-soft);
+    background: var(--surface);
+    border-left: 1px solid var(--line-strong);
+    border-right: 1px solid var(--line-strong);
+    margin: 0 0 -1px;
+    padding: 4px 0;
+}
+.superset-badge {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent-soft);
+    font-family: var(--sans);
+    vertical-align: middle;
+}
+
 .exercise-title { font-size: 17px; font-weight: 600; margin: 0; }
 .exercise-meta { font-size: 12px; color: var(--faint); font-family: var(--mono); margin-top: 2px; }
 
