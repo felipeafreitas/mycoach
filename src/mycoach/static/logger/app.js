@@ -77,6 +77,36 @@
     function getMeta(k) { return tx("meta", "readonly").then(function (s) { return reqP(s.get(k)); }).then(function (r) { return r ? r.value : null; }); }
     function setMeta(k, v) { return tx("meta", "readwrite").then(function (s) { return reqP(s.put({ key: k, value: v })); }); }
 
+    // ── Deferred writes ─────────────────────────────────────────────
+    /* Inline set entry has no Save button: the row *is* the record, so every
+       keystroke is a potential write. Typing debounces — a typed set survives
+       the app being killed 250ms after the last keystroke — while anything
+       structural (a set added, deleted, retyped) writes at once. The queue
+       holds the live session object, never a copy, so a late flush can never
+       write a stale value. */
+    var PERSIST_DEBOUNCE_MS = 250;
+    var pendingSession = null;
+    var persistTimer = null;
+
+    function schedulePersist(s) {
+        pendingSession = s;
+        if (persistTimer) return;
+        persistTimer = setTimeout(function () { persistTimer = null; flushPersist(); }, PERSIST_DEBOUNCE_MS);
+    }
+    function flushPersist() {
+        if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+        var s = pendingSession;
+        pendingSession = null;
+        return s ? putSession(s) : Promise.resolve();
+    }
+    function persistNow(s) { pendingSession = s; return flushPersist(); }
+    /* Drop queued writes for a session about to be deleted, so a stray flush
+       cannot resurrect it after delSession. */
+    function dropPersist() {
+        if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+        pendingSession = null;
+    }
+
     // ── State ───────────────────────────────────────────────────────
     var state = { activeId: null, exerciseCache: [], routine: null };
 
@@ -386,7 +416,7 @@
         view.innerHTML = "";
 
         view.appendChild(
-            el("button", { class: "iconbtn", style: "margin:18px 0 4px;margin-left:-8px", onclick: function () { render(); } }, ["‹ Back"])
+            el("button", { class: "iconbtn", style: "margin:18px 0 4px;margin-left:-8px", onclick: function () { flushPersist().then(function () { render(); }); } }, ["‹ Back"])
         );
 
         if (ro) {
@@ -395,7 +425,7 @@
         } else {
             var titleInput = el("input", {
                 class: "input", value: s.title, "aria-label": "Session title",
-                onchange: function (e) { s.title = e.target.value.trim() || "Session"; putSession(s); },
+                onchange: function (e) { s.title = e.target.value.trim() || "Session"; persistNow(s); },
             });
             view.appendChild(el("div", { class: "field", style: "margin-top:8px" }, [titleInput]));
             view.appendChild(el("p", { class: "sub faint", style: "font-size:13px", text: fmtTime(s.start_time) }));
@@ -417,52 +447,373 @@
             ]);
         } else {
             setActionbar([
+                el("button", { class: "iconbtn", "aria-label": "Cancel session", onclick: function () { confirmCancel(s); } }, ["✕"]),
                 el("button", { class: "btn btn--ghost", onclick: function () { openAddExercise(s); } }, ["＋ Exercise"]),
                 el("button", { class: "btn btn--primary", style: "flex:2", onclick: function () { finishSession(s); } }, ["Finish"]),
             ]);
         }
     }
 
-    function exerciseCard(s, ex, exIdx, ro) {
+    function exerciseMeta(ex) {
         var meta = ex.sets.length + (ex.sets.length === 1 ? " set" : " sets");
         if (ex.target_sets) meta += "  ·  Target " + ex.target_sets + " × " + ex.rep_range;
-        var head = el("div", { class: "card__head" }, [
-            el("div", {}, [
-                el("p", { class: "exercise-title", text: ex.title }),
-                el("div", { class: "exercise-meta", text: meta }),
-            ]),
-            ro ? null : el("button", { class: "iconbtn", onclick: function () { ex.remove = true; s.exercises.splice(exIdx, 1); putSession(s).then(function () { renderSession(s); }); } }, ["Remove"]),
-        ]);
-        var card = el("div", { class: "card" }, [head]);
+        return meta;
+    }
 
+    function cardFor(exIdx) { return $("view").querySelector('.card[data-ex="' + exIdx + '"]'); }
+
+    function exerciseCard(s, ex, exIdx, ro) {
+        var handle = ro ? null : el("button", { class: "card__drag", type: "button", "aria-label": "Reorder exercise", tabindex: "-1" }, ["⠿"]);
+        var head = el("div", { class: "card__head" }, [
+            handle,
+            el("div", { class: "card__headmain" }, [
+                el("p", { class: "exercise-title", text: ex.title }),
+                el("div", { class: "exercise-meta", text: exerciseMeta(ex) }),
+            ]),
+            ro ? null : el("button", { class: "iconbtn", onclick: function () {
+                var i = s.exercises.indexOf(ex);
+                if (i >= 0) s.exercises.splice(i, 1);
+                persistNow(s).then(function () { renderSession(s); });
+            } }, ["Remove"]),
+        ]);
+        var sets = el("div", { class: "card__sets" });
+        var card = el("div", { class: "card", "data-ex": exIdx }, [head, sets]);
+        if (handle) enableReorder(handle, card, s);
+
+        // Hidden by CSS until a row follows it, so an empty card stays quiet.
+        if (!ro) sets.appendChild(setHeadRow());
         ex.sets.forEach(function (set, i) {
-            var w = set.weight_kg != null ? set.weight_kg : "—";
-            var reps = set.reps != null ? set.reps : "—";
-            var row = el("div", { class: "setrow" }, [
-                el("span", { class: "setrow__idx", text: String(i + 1) }),
-                el("span", { class: "setrow__val", html: w + '<small>&nbsp;kg</small>' }),
-                el("span", { class: "setrow__val", html: reps + '<small>&nbsp;reps</small>' }),
-                el("span", { class: "setrow__type setrow__type--" + (set.set_type || "normal"), text: set.rpe != null ? "RPE " + set.rpe : (set.set_type !== "normal" ? set.set_type : "") }),
-                ro ? el("span", {}) : el("button", { class: "iconbtn", "aria-label": "Delete set", onclick: function () { ex.sets.splice(i, 1); putSession(s).then(function () { renderSession(s); }); } }, ["✕"]),
-            ]);
-            card.appendChild(row);
+            sets.appendChild(ro ? readSetRow(set, i) : editSetRow(s, ex, card, set));
         });
 
         if (!ro) {
+            refreshBadges(card, ex);
             card.appendChild(
-                el("button", { class: "btn btn--sm btn--ghost", style: "margin-top:12px", onclick: function () { openAddSet(s, ex); } }, ["＋ Add set"])
+                el("button", { class: "btn btn--sm btn--ghost", style: "margin-top:12px", onclick: function () { addSet(s, ex, card); } }, ["＋ Add set"])
             );
         }
         return card;
     }
 
+    function setHeadRow() {
+        return el("div", { class: "setrow setrow--edit setrow--head" }, [
+            el("span", {}),
+            el("span", { text: "kg" }),
+            el("span", { text: "reps" }),
+            el("span", { text: "rpe" }),
+            el("span", {}),
+        ]);
+    }
+
+    /* A synced session is read-only: values render as text, as they always did. */
+    function readSetRow(set, i) {
+        var w = set.weight_kg != null ? set.weight_kg : "—";
+        var reps = set.reps != null ? set.reps : "—";
+        return el("div", { class: "setrow" }, [
+            el("span", { class: "setrow__idx", text: String(i + 1) }),
+            el("span", { class: "setrow__val", html: w + '<small>&nbsp;kg</small>' }),
+            el("span", { class: "setrow__val", html: reps + '<small>&nbsp;reps</small>' }),
+            el("span", { class: "setrow__type setrow__type--" + (set.set_type || "normal"), text: set.rpe != null ? "RPE " + set.rpe : (set.set_type !== "normal" ? set.set_type : "") }),
+            el("span", {}),
+        ]);
+    }
+
+    function numOrNull(raw, parse) {
+        if (raw === "") return null;
+        var n = parse(raw);
+        return isNaN(n) ? null : n;
+    }
+
+    /* One editable row. Values go straight onto the set object as they are
+       typed, so there is nothing to save and nothing to lose. Nothing in here
+       re-renders: a re-render mid-keystroke would destroy the focus, the caret
+       and the scroll position, which is the whole difficulty of this screen.
+       Structural changes patch the DOM in place instead (see refreshBadges). */
+    function editSetRow(s, ex, card, set) {
+        var badge = el("button", { class: "setrow__badge", "aria-label": "Set type", onclick: function () { openSetType(s, ex, set, card); } });
+
+        function cell(props, apply) {
+            var input = el("input", props);
+            input.addEventListener("input", function () { apply(input.value); schedulePersist(s); });
+            input.addEventListener("change", function () { apply(input.value); flushPersist(); });
+            input.addEventListener("blur", function () { flushPersist(); });
+            input.addEventListener("focus", function () { keepRowVisible(row); });
+            return input;
+        }
+
+        var weight = cell(
+            { class: "input input--cell mono", type: "number", inputmode: "decimal", step: "0.5", min: "0", placeholder: "—", "aria-label": "Weight in kg", value: set.weight_kg != null ? set.weight_kg : "" },
+            function (v) { set.weight_kg = numOrNull(v, parseFloat); }
+        );
+        var reps = cell(
+            { class: "input input--cell mono", type: "number", inputmode: "numeric", min: "0", placeholder: "—", "aria-label": "Reps", value: set.reps != null ? set.reps : "" },
+            function (v) { set.reps = numOrNull(v, function (x) { return parseInt(x, 10); }); }
+        );
+        var rpe = cell(
+            { class: "input input--cell mono", type: "number", inputmode: "decimal", step: "0.5", min: "1", max: "10", placeholder: "—", "aria-label": "RPE", value: set.rpe != null ? set.rpe : "" },
+            function (v) { set.rpe = numOrNull(v, parseFloat); }
+        );
+
+        var row = el("div", { class: "setrow setrow--edit" }, [
+            badge, weight, reps, rpe,
+            el("button", { class: "iconbtn setrow__del", "aria-label": "Delete set", onclick: function () { removeSet(s, ex, card, set, row); } }, ["✕"]),
+        ]);
+        return row;
+    }
+
+    /* Set type is rare enough to hide behind the set number: the badge shows
+       the index for a normal set and an initial for anything else, and is the
+       control that changes it. Badges carry the index, so every structural
+       change restamps them — along with the card's set count. */
+    var SET_TYPE_INITIAL = { warmup: "W", dropset: "D", failure: "F" };
+
+    function refreshBadges(card, ex) {
+        var badges = card.querySelectorAll(".setrow:not(.setrow--head) .setrow__badge");
+        ex.sets.forEach(function (set, i) {
+            if (!badges[i]) return;
+            var type = set.set_type || "normal";
+            badges[i].textContent = SET_TYPE_INITIAL[type] || String(i + 1);
+            badges[i].className = "setrow__badge setrow__badge--" + type;
+        });
+        card.querySelector(".exercise-meta").textContent = exerciseMeta(ex);
+    }
+
+    /* Prefill carried over from the old add-set sheet: the previous set's
+       weight and reps, else the bottom of the prescribed rep range. The
+       difference is that the prefill is now stored the moment the row appears
+       — an untouched row is a logged set, not a discarded draft. */
+    function addSet(s, ex, card) {
+        var prev = ex.sets.length ? ex.sets[ex.sets.length - 1] : null;
+        var set = {
+            weight_kg: prev && prev.weight_kg != null ? prev.weight_kg : null,
+            reps: prev && prev.reps != null ? prev.reps : (!prev ? repRangeLowerBound(ex.rep_range) : null),
+            rpe: null,
+            set_type: "normal",
+        };
+        ex.sets.push(set);
+        var row = editSetRow(s, ex, card, set);
+        card.querySelector(".card__sets").appendChild(row);
+        refreshBadges(card, ex);
+        persistNow(s);
+        var weight = row.querySelector("input");
+        weight.focus();
+        keepRowVisible(row);
+    }
+
+    function removeSet(s, ex, card, set, row) {
+        var i = ex.sets.indexOf(set);
+        if (i >= 0) ex.sets.splice(i, 1);
+        row.remove();
+        refreshBadges(card, ex);
+        persistNow(s);
+    }
+
+    function openSetType(s, ex, set, card) {
+        var current = set.set_type || "normal";
+        openSheet("Set type", SET_TYPES.map(function (t) {
+            return el("button", {
+                class: "btn btn--block " + (t === current ? "btn--primary" : "btn--ghost"),
+                style: "margin-top:8px;text-transform:capitalize",
+                onclick: function () { set.set_type = t; closeSheet(); refreshBadges(card, ex); persistNow(s); },
+            }, [t]);
+        }));
+    }
+
+    /* ── Drag to reorder exercises ──────────────────────────────────
+       HTML5 drag-and-drop never fires on touch, so this is built from
+       Pointer Events by hand. A drag begins only from the grip handle —
+       never the card body, which is now full of editable inputs (#49) —
+       and only once a short long-press (or a deliberate move) has armed
+       it, so a stray tap can't reorder. `touch-action: none` on the
+       handle keeps the browser from claiming the gesture as a scroll,
+       and the pointer is captured to the handle so events keep flowing
+       as the finger travels over other cards.
+
+       The lifted card is glued under the finger with a transform while
+       its siblings stay put; a fixed drop-line marks where it will land.
+       On release we splice `s.exercises` and persist — session-local,
+       never written back to the routine (#51) — then re-render, which is
+       safe here because a drop has no focus to lose. */
+    var LONG_PRESS_MS = 160;
+    var PRE_DRAG_SLOP = 8;   // a move past this on the handle arms the drag early
+    var EDGE_ZONE = 72;      // autoscroll when the finger nears a viewport edge
+    var EDGE_SPEED = 16;     // px per frame at the very edge
+    var drag = null;
+
+    function enableReorder(handle, card, s) {
+        handle.addEventListener("pointerdown", function (e) {
+            if (drag || (e.button != null && e.button > 0)) return;
+            e.preventDefault();
+            var pid = e.pointerId;
+            var startX = e.clientX, startY = e.clientY;
+            var pressTimer = setTimeout(function () { arm(startY); }, LONG_PRESS_MS);
+
+            function cleanup() {
+                if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+                handle.removeEventListener("pointermove", preMove);
+                handle.removeEventListener("pointerup", preEnd);
+                handle.removeEventListener("pointercancel", preEnd);
+            }
+            function arm(pointerY) {
+                cleanup();
+                beginDrag(s, card, handle, pid, pointerY);
+            }
+            function preMove(ev) {
+                if (ev.pointerId !== pid) return;
+                if (Math.abs(ev.clientY - startY) > PRE_DRAG_SLOP ||
+                    Math.abs(ev.clientX - startX) > PRE_DRAG_SLOP) arm(ev.clientY);
+            }
+            function preEnd(ev) {
+                if (ev.pointerId !== pid) return;
+                cleanup(); // released or cancelled before arming — it was a tap
+            }
+            handle.addEventListener("pointermove", preMove);
+            handle.addEventListener("pointerup", preEnd);
+            handle.addEventListener("pointercancel", preEnd);
+        });
+    }
+
+    function beginDrag(s, card, handle, pid, pointerY) {
+        flushPersist(); // a set typed a moment ago must be saved before we re-render
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        try { handle.setPointerCapture(pid); } catch (_) {}
+        var rect = card.getBoundingClientRect();
+        drag = {
+            s: s, card: card, handle: handle, pid: pid,
+            grabOffset: pointerY - rect.top,
+            pointerY: pointerY,
+            left: rect.left, width: rect.width,
+            translateY: 0, targetIdx: null,
+            line: el("div", { class: "drop-line" }),
+            rafId: null,
+        };
+        card.classList.add("card--dragging");
+        document.body.classList.add("reordering");
+        document.body.appendChild(drag.line);
+        handle.addEventListener("pointermove", onDragMove);
+        handle.addEventListener("pointerup", onDragUp);
+        handle.addEventListener("pointercancel", onDragCancel);
+        positionDrag(pointerY);
+        drag.rafId = requestAnimationFrame(autoscrollTick);
+    }
+
+    function onDragMove(e) {
+        if (!drag || e.pointerId !== drag.pid) return;
+        e.preventDefault();
+        drag.pointerY = e.clientY;
+        positionDrag(e.clientY);
+    }
+    function onDragUp(e) { if (drag && e.pointerId === drag.pid) { e.preventDefault(); endDrag(true); } }
+    function onDragCancel(e) { if (drag && e.pointerId === drag.pid) endDrag(false); }
+
+    /* Keep the lifted card's grabbed point under the finger (in viewport
+       coordinates, so it holds still while the list autoscrolls beneath it),
+       then recompute where it would drop. */
+    function positionDrag(pointerY) {
+        var card = drag.card;
+        var natTop = card.getBoundingClientRect().top - drag.translateY;
+        drag.translateY = (pointerY - drag.grabOffset) - natTop;
+        card.style.transform = "translateY(" + drag.translateY + "px)";
+        drag.targetIdx = targetIndex(pointerY);
+        positionLine(drag.targetIdx);
+    }
+
+    function otherCards() {
+        return Array.prototype.slice.call($("view").querySelectorAll(".card"))
+            .filter(function (c) { return c !== drag.card; });
+    }
+
+    /* Insertion index into s.exercises *with the dragged item removed*:
+       the count of other cards whose midpoint the finger has passed. */
+    function targetIndex(pointerY) {
+        var idx = 0;
+        otherCards().forEach(function (c) {
+            var r = c.getBoundingClientRect();
+            if (pointerY > r.top + r.height / 2) idx++;
+        });
+        return idx;
+    }
+
+    function positionLine(idx) {
+        var cards = otherCards();
+        if (!cards.length) { drag.line.style.display = "none"; return; }
+        var y;
+        if (idx >= cards.length) y = cards[cards.length - 1].getBoundingClientRect().bottom + 5;
+        else y = cards[idx].getBoundingClientRect().top - 7;
+        drag.line.style.display = "block";
+        drag.line.style.top = y + "px";
+        drag.line.style.left = drag.left + "px";
+        drag.line.style.width = drag.width + "px";
+    }
+
+    function autoscrollTick() {
+        if (!drag) return;
+        var y = drag.pointerY, vh = window.innerHeight, dy = 0;
+        if (y < EDGE_ZONE) dy = -EDGE_SPEED * (1 - y / EDGE_ZONE);
+        else if (y > vh - EDGE_ZONE) dy = EDGE_SPEED * (1 - (vh - y) / EDGE_ZONE);
+        if (dy) { window.scrollBy(0, dy); positionDrag(drag.pointerY); }
+        drag.rafId = requestAnimationFrame(autoscrollTick);
+    }
+
+    function endDrag(commit) {
+        var d = drag;
+        drag = null;
+        if (!d) return;
+        if (d.rafId) cancelAnimationFrame(d.rafId);
+        d.handle.removeEventListener("pointermove", onDragMove);
+        d.handle.removeEventListener("pointerup", onDragUp);
+        d.handle.removeEventListener("pointercancel", onDragCancel);
+        try { d.handle.releasePointerCapture(d.pid); } catch (_) {}
+        d.line.remove();
+        d.card.classList.remove("card--dragging");
+        d.card.style.transform = "";
+        document.body.classList.remove("reordering");
+
+        var s = d.s;
+        if (commit) {
+            var from = parseInt(d.card.getAttribute("data-ex"), 10);
+            var to = d.targetIdx != null ? d.targetIdx : from;
+            if (to !== from) {
+                var moved = s.exercises.splice(from, 1)[0];
+                if (moved) s.exercises.splice(to, 0, moved);
+                persistNow(s).then(function () { renderSession(s); });
+                return;
+            }
+        }
+        renderSession(s); // nothing moved (or cancelled) — rebuild to a clean state
+    }
+
+    /* iOS raises the keyboard over the bottom of the screen only after focus
+       lands, so centring the row has to wait for it; `scroll-margin` on the
+       row keeps the action bar off it. */
+    function keepRowVisible(row) {
+        setTimeout(function () {
+            if (row.isConnected && row.scrollIntoView) row.scrollIntoView({ block: "center", behavior: "smooth" });
+        }, 220);
+    }
+
     function finishSession(s) {
+        /* Rows appear prefilled and are stored immediately, so a tapped-then-
+           abandoned row is a set with nothing in it. It is not data — and a
+           null weight *and* null reps would poison the 1RM estimates the
+           coaching prompts read — so it is dropped rather than synced. */
+        s.exercises.forEach(function (ex) {
+            ex.sets = ex.sets.filter(function (set) { return set.weight_kg != null || set.reps != null; });
+        });
         s.end_time = new Date().toISOString();
-        putSession(s).then(function () {
+        persistNow(s).then(function () {
             render();
             toast("Session saved");
             syncNow(false);
         });
+    }
+
+    function confirmCancel(s) {
+        openSheet("Discard this session?", [
+            el("p", { class: "sub", style: "margin-bottom:16px", text: "This is unrecoverable — nothing is kept, and nothing syncs to MyCoach." }),
+            el("button", { class: "btn btn--danger btn--block", onclick: function () { releaseWakeLock(); dropPersist(); delSession(s.id).then(function () { closeSheet(); render(); toast("Session discarded"); }); } }, ["Discard session"]),
+            el("button", { class: "btn btn--ghost btn--block", style: "margin-top:8px", onclick: closeSheet }, ["Keep going"]),
+        ]);
     }
 
     function confirmDelete(s) {
@@ -473,7 +824,7 @@
         ]);
     }
 
-    // ── Sheets: add exercise / add set / settings ───────────────────
+    // ── Sheets: add exercise / set type / settings ──────────────────
     function openSheet(title, children) {
         closeSheet();
         var sheet = el("div", { class: "sheet" }, [el("h2", { class: "sheet__title", text: title })].concat(children));
@@ -493,56 +844,19 @@
         function add() {
             var title = input.value.trim();
             if (!title) return;
-            s.exercises.push({ title: title, notes: null, sets: [] });
-            putSession(s).then(function () { closeSheet(); renderSession(s); openAddSet(s, s.exercises[s.exercises.length - 1]); });
+            var ex = { title: title, notes: null, sets: [] };
+            s.exercises.push(ex);
+            persistNow(s).then(function () {
+                closeSheet();
+                renderSession(s);
+                addSet(s, ex, cardFor(s.exercises.length - 1));
+            });
         }
         openSheet("Add exercise", [
             el("div", { class: "field" }, [datalist, input]),
             el("button", { class: "btn btn--primary btn--block", onclick: add }, ["Add exercise"]),
         ]);
         setTimeout(function () { input.focus(); }, 50);
-    }
-
-    function openAddSet(s, ex) {
-        var prev = ex.sets.length ? ex.sets[ex.sets.length - 1] : null;
-        var repsDefault = prev && prev.reps != null ? prev.reps : (!prev ? repRangeLowerBound(ex.rep_range) : null);
-        var weight = el("input", { class: "input mono", type: "number", inputmode: "decimal", step: "0.5", min: "0", placeholder: "kg", value: prev && prev.weight_kg != null ? prev.weight_kg : "" });
-        var reps = el("input", { class: "input mono", type: "number", inputmode: "numeric", min: "0", placeholder: "reps", value: repsDefault != null ? repsDefault : "" });
-        var rpe = el("input", { class: "input mono", type: "number", inputmode: "decimal", step: "0.5", min: "1", max: "10", placeholder: "RPE (optional)" });
-        var chosenType = "normal";
-        var segButtons = SET_TYPES.map(function (t) {
-            return el("button", { type: "button", "aria-pressed": t === "normal" ? "true" : "false", onclick: function () {
-                chosenType = t;
-                seg.querySelectorAll("button").forEach(function (b) { b.setAttribute("aria-pressed", "false"); });
-                this.setAttribute("aria-pressed", "true");
-            }, text: t });
-        });
-        var seg = el("div", { class: "seg" }, segButtons);
-
-        function add(keepOpen) {
-            var wv = weight.value !== "" ? parseFloat(weight.value) : null;
-            var rv = reps.value !== "" ? parseInt(reps.value, 10) : null;
-            var pv = rpe.value !== "" ? parseFloat(rpe.value) : null;
-            if (rv == null && wv == null) { toast("Enter a weight or reps", "err"); return; }
-            ex.sets.push({ weight_kg: wv, reps: rv, rpe: pv, set_type: chosenType });
-            putSession(s).then(function () {
-                if (keepOpen) { renderSession(s); openAddSet(s, ex); }
-                else { closeSheet(); renderSession(s); }
-            });
-        }
-        openSheet("Add set · " + ex.title, [
-            el("div", { class: "row" }, [
-                el("div", { class: "field", style: "margin:0" }, [el("label", { text: "Weight" }), weight]),
-                el("div", { class: "field", style: "margin:0" }, [el("label", { text: "Reps" }), reps]),
-            ]),
-            el("div", { class: "field", style: "margin-top:14px" }, [el("label", { text: "RPE" }), rpe]),
-            el("div", { class: "field" }, [el("label", { text: "Set type" }), seg]),
-            el("div", { class: "row" }, [
-                el("button", { class: "btn btn--ghost", onclick: function () { add(true); } }, ["Save + add"]),
-                el("button", { class: "btn btn--primary", onclick: function () { add(false); } }, ["Save set"]),
-            ]),
-        ]);
-        setTimeout(function () { weight.focus(); }, 50);
     }
 
     function openSettings() {
@@ -580,10 +894,12 @@
     $("sync-chip").addEventListener("click", function () { syncNow(true); });
     window.addEventListener("online", function () { refreshChip(); syncNow(false); pullRoutine(); });
     window.addEventListener("offline", refreshChip);
+    // A swipe-away kill does not always fire visibilitychange first.
+    window.addEventListener("pagehide", function () { flushPersist(); });
     document.addEventListener("visibilitychange", function () {
         // Walking back into LAN range and reopening the tab should retry
         // without waiting for the next manual sync press.
-        if (document.visibilityState !== "visible") return;
+        if (document.visibilityState !== "visible") { flushPersist(); return; }
         syncNow(false);
         // iOS silently drops the lock when the tab backgrounds.
         if (wakeWanted) acquireWakeLock();
