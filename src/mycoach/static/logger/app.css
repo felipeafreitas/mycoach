@@ -292,7 +292,7 @@ body.reordering { user-select: none; -webkit-user-select: none; cursor: grabbing
 
 /* editable set rows — the row is the input, there is no save step */
 .setrow--edit {
-    grid-template-columns: 34px 1fr 1fr 58px 28px;
+    grid-template-columns: 34px 1fr 1fr 28px;
     padding: 5px 0;
     /* clears the fixed action bar when a focused row is scrolled into view */
     scroll-margin: 96px 0 128px;
@@ -335,6 +335,12 @@ body.reordering { user-select: none; -webkit-user-select: none; cursor: grabbing
 .input--cell::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .input--cell[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .setrow__del { padding: 0; font-size: 12px; min-height: 44px; }
+
+/* RIR prompt, one row per exercise, shown in a sheet at Finish */
+.rir-row { margin-top: 16px; }
+.rir-row:first-child { margin-top: 4px; }
+.rir-row__title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.rir-row__buttons { display: flex; gap: 8px; }
 
 /* session history rows */
 .session-row {
