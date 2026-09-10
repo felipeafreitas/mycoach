@@ -1,0 +1,130 @@
+{
+  "_comment": "Crosswalk from MyCoach's historical exercise_title strings onto exercise_id (free-exercise-db slugs). Built for wayfinder ticket #59; consumed by the exercise-identity migration in #56 to backfill exercise_id. Reviewable, hand-checked artifact -- not a one-off script. Titles are the exact strings stored in GymWorkoutDetail.exercise_title (SELECT DISTINCT via /api/logger/exercises); the backfill must match them verbatim. A null exercise_id is a custom exercise (store-and-display, excluded from id-keyed reasoning). match: exact=identity after spelling normalisation; judgement=hand-picked variant of an unambiguous movement; athlete=movement identity confirmed by the athlete; none=no catalogue counterpart.",
+  "catalogue": {
+    "source": "https://github.com/yuhonas/free-exercise-db",
+    "resolved_against_commit": "a859101d633a01c4a1a920d6a8ce41dabba0705f",
+    "note": "ids resolved against free-exercise-db main at this commit. #56 sets the authoritative pin; if it pins a different commit, re-validate every exercise_id here.",
+    "record_count_at_resolution": 876
+  },
+  "entries": [
+    {
+      "exercise_title": "Bench Press (Dumbell)",
+      "exercise_id": "Dumbbell_Bench_Press",
+      "catalogue_name": "Dumbbell Bench Press",
+      "match": "exact",
+      "note": "Exact after normalising the app's 'Dumbell' spelling."
+    },
+    {
+      "exercise_title": "Bulgarian. Split Squat",
+      "exercise_id": null,
+      "catalogue_name": null,
+      "match": "none",
+      "note": "Bulgarian (rear-foot-elevated) split squat has no catalogue counterpart. Kept as a custom exercise by athlete's decision rather than mapped to a plain split squat, which would misrepresent the movement on the gym floor. Candidate for a local catalogue addition once #56 defines an additions mechanism for the pinned dataset."
+    },
+    {
+      "exercise_title": "Deadlift",
+      "exercise_id": "Barbell_Deadlift",
+      "catalogue_name": "Barbell Deadlift",
+      "match": "judgement",
+      "note": "Unqualified 'Deadlift' -> the conventional barbell deadlift. Catalogue has no bare 'Deadlift'."
+    },
+    {
+      "exercise_title": "Dumbell Row",
+      "exercise_id": "One-Arm_Dumbbell_Row",
+      "catalogue_name": "One-Arm Dumbbell Row",
+      "match": "athlete",
+      "note": "Athlete confirmed single-arm, bench-supported row."
+    },
+    {
+      "exercise_title": "Face Pull",
+      "exercise_id": "Face_Pull",
+      "catalogue_name": "Face Pull",
+      "match": "exact",
+      "note": "Exact (cable)."
+    },
+    {
+      "exercise_title": "Kettlebell Halo",
+      "exercise_id": "Kettlebell_Halo",
+      "catalogue_name": "Kettlebell Halo",
+      "match": "exact",
+      "note": "Exact."
+    },
+    {
+      "exercise_title": "Lateral Raise (Dumbell)",
+      "exercise_id": "Side_Lateral_Raise",
+      "catalogue_name": "Side Lateral Raise",
+      "match": "judgement",
+      "note": "Dumbbell standing side/lateral raise. Token-matcher misranked toward rear-delt variants; Side_Lateral_Raise is the standard lateral raise and is dumbbell-equipped."
+    },
+    {
+      "exercise_title": "Leg Raise",
+      "exercise_id": "Hanging_Leg_Raise",
+      "catalogue_name": "Hanging Leg Raise",
+      "match": "athlete",
+      "note": "Athlete confirmed hanging leg raise (bodyweight)."
+    },
+    {
+      "exercise_title": "Overhead Press (Dumbell)",
+      "exercise_id": "Dumbbell_Shoulder_Press",
+      "catalogue_name": "Dumbbell Shoulder Press",
+      "match": "judgement",
+      "note": "Dumbbell overhead/shoulder press. Standing vs seated not distinguished in history; Dumbbell_Shoulder_Press is the generic catalogue entry for the movement."
+    },
+    {
+      "exercise_title": "Pull Up",
+      "exercise_id": "Pullups",
+      "catalogue_name": "Pullups",
+      "match": "judgement",
+      "note": "Bare 'Pull Up' -> bodyweight Pullups. Missed by token match (catalogue joins the word as 'Pullups')."
+    },
+    {
+      "exercise_title": "Scapular Pull Up",
+      "exercise_id": "Scapular_Pull-Up",
+      "catalogue_name": "Scapular Pull-Up",
+      "match": "exact",
+      "note": "Exact."
+    },
+    {
+      "exercise_title": "Seated Incline Curl (Dumbell)",
+      "exercise_id": "Incline_Dumbbell_Curl",
+      "catalogue_name": "Incline Dumbbell Curl",
+      "match": "judgement",
+      "note": "Incline is the defining trait; catalogue's Incline Dumbbell Curl is performed seated on an incline bench."
+    },
+    {
+      "exercise_title": "Skullcrusher (Dumbell)",
+      "exercise_id": "Lying_Dumbbell_Tricep_Extension",
+      "catalogue_name": "Lying Dumbbell Tricep Extension",
+      "match": "judgement",
+      "note": "'Skullcrusher' is a synonym for the lying triceps extension; dumbbell equipment matches. Synonym gap not catchable by string similarity."
+    },
+    {
+      "exercise_title": "Squat (Barbell)",
+      "exercise_id": "Barbell_Squat",
+      "catalogue_name": "Barbell Squat",
+      "match": "exact",
+      "note": "Exact."
+    },
+    {
+      "exercise_title": "Squat (Smith)",
+      "exercise_id": "Smith_Machine_Squat",
+      "catalogue_name": "Smith Machine Squat",
+      "match": "exact",
+      "note": "Exact (machine)."
+    },
+    {
+      "exercise_title": "Standing Calf Raise",
+      "exercise_id": "Standing_Calf_Raises",
+      "catalogue_name": "Standing Calf Raises",
+      "match": "judgement",
+      "note": "Bare 'Standing Calf Raise' -> the machine Standing Calf Raises (plural in catalogue). Not the barbell/dumbbell-loaded variants."
+    },
+    {
+      "exercise_title": "Triceps Extension (Dumbell)",
+      "exercise_id": "Standing_Dumbbell_Triceps_Extension",
+      "catalogue_name": "Standing Dumbbell Triceps Extension",
+      "match": "judgement",
+      "note": "Overhead dumbbell triceps extension; the conventional reading of a bare dumbbell triceps extension."
+    }
+  ]
+}
