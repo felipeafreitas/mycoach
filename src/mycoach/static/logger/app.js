@@ -164,6 +164,30 @@
         return m ? parseInt(m[1], 10) : null;
     }
 
+    function resolveExerciseChoice(raw, catalogue) {
+        var title = raw.trim();
+        var match = (catalogue || []).find(function (exercise) {
+            var name = typeof exercise === "string" ? exercise : exercise.name;
+            return name && name.toLocaleLowerCase() === title.toLocaleLowerCase();
+        });
+        if (!match || typeof match === "string") {
+            return { exercise_id: null, title: title };
+        }
+        return { exercise_id: match.id, title: match.name };
+    }
+
+    function sessionExerciseFromRoutine(exercise) {
+        return {
+            exercise_id: exercise.exercise_id || null,
+            title: exercise.exercise_name,
+            notes: exercise.notes || null,
+            sets: [],
+            target_sets: exercise.sets,
+            rep_range: exercise.rep_range,
+            superset_group: exercise.superset_group,
+        };
+    }
+
     /* The heaviest working (non-warmup) set in an exercise, ties going to the
        first set reached at that weight. A bodyweight exercise with no logged
        weight still has a top set — the first working set — since every entry
@@ -191,6 +215,7 @@
         s.exercises.forEach(function (ex) {
             ex.sets.forEach(function (set, i) {
                 sets.push({
+                    exercise_id: ex.exercise_id || null,
                     exercise_title: ex.title,
                     exercise_notes: ex.notes || null,
                     set_index: i + 1,
@@ -405,16 +430,7 @@
             start_time: now.toISOString(),
             end_time: null,
             notes: null,
-            exercises: day.exercises.slice().sort(function (a, b) { return a.order_index - b.order_index; }).map(function (e) {
-                return {
-                    title: e.exercise_name,
-                    notes: e.notes || null,
-                    sets: [],
-                    target_sets: e.sets,
-                    rep_range: e.rep_range,
-                    superset_group: e.superset_group,
-                };
-            }),
+            exercises: day.exercises.slice().sort(function (a, b) { return a.order_index - b.order_index; }).map(sessionExerciseFromRoutine),
             synced: false,
             created_at: now.toISOString(),
         };
@@ -995,12 +1011,20 @@
     function openAddExercise(s) {
         var listId = "ex-list";
         var datalist = el("datalist", { id: listId },
-            (state.exerciseCache || []).map(function (t) { return el("option", { value: t }); }));
+            (state.exerciseCache || []).map(function (exercise) {
+                return el("option", { value: typeof exercise === "string" ? exercise : exercise.name });
+            }));
         var input = el("input", { class: "input", list: listId, placeholder: "e.g. Bench Press", autocomplete: "off", autocapitalize: "words" });
         function add() {
-            var title = input.value.trim();
-            if (!title) return;
-            var ex = { title: title, notes: null, sets: [], superset_group: null };
+            var choice = resolveExerciseChoice(input.value, state.exerciseCache);
+            if (!choice.title) return;
+            var ex = {
+                exercise_id: choice.exercise_id,
+                title: choice.title,
+                notes: null,
+                sets: [],
+                superset_group: null,
+            };
             s.exercises.push(ex);
             persistNow(s).then(function () {
                 closeSheet();
@@ -1085,6 +1109,6 @@
     /* Dev-only: exposes pure functions to node:test. `module` is undefined in
        the browser, so this branch never runs there. */
     if (typeof module !== "undefined" && module.exports) {
-        module.exports = { toPayload: toPayload, repRangeLowerBound: repRangeLowerBound, numOrNull: numOrNull, pruneEmptySets: pruneEmptySets, topSetForExercise: topSetForExercise };
+        module.exports = { toPayload: toPayload, repRangeLowerBound: repRangeLowerBound, numOrNull: numOrNull, pruneEmptySets: pruneEmptySets, topSetForExercise: topSetForExercise, resolveExerciseChoice: resolveExerciseChoice, sessionExerciseFromRoutine: sessionExerciseFromRoutine };
     }
 })();

@@ -79,6 +79,53 @@ class TestPushImport:
         assert data["activities_skipped"] == 0
 
     @pytest.mark.asyncio
+    async def test_stable_exercise_id_round_trips_through_activity_api(
+        self, client, user: User
+    ) -> None:  # type: ignore[no-untyped-def]
+        batch = _batch()
+        batch["workouts"][0]["sets"][0]["exercise_id"] = "Barbell_Squat"
+
+        response = await client.post(
+            "/api/sources/import/workouts",
+            json=batch,
+            headers={"X-API-Key": TOKEN},
+        )
+        assert response.status_code == 200
+
+        activities = await client.get("/api/activities?sport=gym")
+        first_set = activities.json()["items"][0]["gym_details"][0]
+        assert first_set["exercise_id"] == "Barbell_Squat"
+
+    @pytest.mark.asyncio
+    async def test_legacy_title_resolves_to_stable_id(self, client, user: User) -> None:  # type: ignore[no-untyped-def]
+        batch = _batch()
+        batch["workouts"][0]["sets"][0]["exercise_title"] = "Squat (Barbell)"
+
+        response = await client.post(
+            "/api/sources/import/workouts",
+            json=batch,
+            headers={"X-API-Key": TOKEN},
+        )
+        assert response.status_code == 200
+
+        activities = await client.get("/api/activities?sport=gym")
+        first_set = activities.json()["items"][0]["gym_details"][0]
+        assert first_set["exercise_id"] == "Barbell_Squat"
+
+    @pytest.mark.asyncio
+    async def test_unknown_exercise_id_is_rejected(self, client, user: User) -> None:  # type: ignore[no-untyped-def]
+        batch = _batch()
+        batch["workouts"][0]["sets"][0]["exercise_id"] = "invented-by-a-caller"
+
+        response = await client.post(
+            "/api/sources/import/workouts",
+            json=batch,
+            headers={"X-API-Key": TOKEN},
+        )
+
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_idempotent_repost(self, client, user: User) -> None:  # type: ignore[no-untyped-def]
         headers = {"X-API-Key": TOKEN}
         first = await client.post("/api/sources/import/workouts", json=_batch(), headers=headers)
@@ -106,14 +153,27 @@ class TestLoggerExercises:
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_returns_distinct_titles(self, client, user: User) -> None:  # type: ignore[no-untyped-def]
+    async def test_returns_pinned_catalogue_with_stable_ids(self, client, user: User) -> None:  # type: ignore[no-untyped-def]
+        resp = await client.get("/api/logger/exercises", headers={"X-API-Key": TOKEN})
+
+        assert resp.status_code == 200
+        exercises = resp.json()["exercises"]
+        assert {"id": "Barbell_Squat", "name": "Barbell Squat"} in exercises
+        assert {
+            "id": "mycoach:bulgarian-split-squat",
+            "name": "Bulgarian Split Squat",
+        } in exercises
+        assert len({exercise["id"] for exercise in exercises}) == len(exercises)
+
+    @pytest.mark.asyncio
+    async def test_returns_sorted_distinct_catalogue(self, client, user: User) -> None:  # type: ignore[no-untyped-def]
         headers = {"X-API-Key": TOKEN}
         await client.post("/api/sources/import/workouts", json=_batch(), headers=headers)
 
         resp = await client.get("/api/logger/exercises", headers=headers)
         assert resp.status_code == 200
         exercises = resp.json()["exercises"]
-        assert "Bench Press" in exercises
-        assert "Overhead Press" in exercises
-        # sorted + distinct
-        assert exercises == sorted(set(exercises))
+        names = [exercise["name"] for exercise in exercises]
+        ids = [exercise["id"] for exercise in exercises]
+        assert names == sorted(names, key=str.casefold)
+        assert len(ids) == len(set(ids))

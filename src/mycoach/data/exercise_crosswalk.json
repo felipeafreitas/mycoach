@@ -1,9 +1,9 @@
 {
-  "_comment": "Crosswalk from MyCoach's historical exercise_title strings onto exercise_id (free-exercise-db slugs). Built for wayfinder ticket #59; consumed by the exercise-identity migration in #56 to backfill exercise_id. Reviewable, hand-checked artifact -- not a one-off script. Titles are the exact strings stored in GymWorkoutDetail.exercise_title (SELECT DISTINCT via /api/logger/exercises); the backfill must match them verbatim. A null exercise_id is a custom exercise (store-and-display, excluded from id-keyed reasoning). match: exact=identity after spelling normalisation; judgement=hand-picked variant of an unambiguous movement; athlete=movement identity confirmed by the athlete; none=no catalogue counterpart.",
+  "_comment": "Crosswalk from MyCoach's historical exercise_title strings onto exercise_id. Built for wayfinder ticket #59; consumed by the exercise-identity migration in #56 to backfill exercise_id. Reviewable, hand-checked artifact -- not a one-off script. Titles are the exact strings stored in GymWorkoutDetail.exercise_title; the backfill must match them verbatim. match: exact=identity after spelling normalisation; judgement=hand-picked variant of an unambiguous movement; athlete=movement identity confirmed by the athlete; local=promoted into MyCoach's local catalogue overlay.",
   "catalogue": {
     "source": "https://github.com/yuhonas/free-exercise-db",
     "resolved_against_commit": "a859101d633a01c4a1a920d6a8ce41dabba0705f",
-    "note": "ids resolved against free-exercise-db main at this commit. #56 sets the authoritative pin; if it pins a different commit, re-validate every exercise_id here.",
+    "note": "Upstream ids resolved against the authoritative pin. Revalidate every upstream exercise_id when re-pinning; reserved mycoach: ids are preserved from the local overlay.",
     "record_count_at_resolution": 876
   },
   "entries": [
@@ -16,10 +16,10 @@
     },
     {
       "exercise_title": "Bulgarian. Split Squat",
-      "exercise_id": null,
-      "catalogue_name": null,
-      "match": "none",
-      "note": "Bulgarian (rear-foot-elevated) split squat has no catalogue counterpart. Kept as a custom exercise by athlete's decision rather than mapped to a plain split squat, which would misrepresent the movement on the gym floor. Candidate for a local catalogue addition once #56 defines an additions mechanism for the pinned dataset."
+      "exercise_id": "mycoach:bulgarian-split-squat",
+      "catalogue_name": "Bulgarian Split Squat",
+      "match": "local",
+      "note": "Promoted to MyCoach's local catalogue overlay because the pinned upstream has no Bulgarian (rear-foot-elevated) split squat. The reserved mycoach: namespace survives upstream re-pins without colliding with upstream slugs."
     },
     {
       "exercise_title": "Deadlift",
