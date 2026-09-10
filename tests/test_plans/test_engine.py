@@ -48,6 +48,7 @@ VALID_GYM_ADJUSTMENT = json.dumps(
     {
         "exercises": [
             {
+                "exercise_id": "Barbell_Bench_Press_-_Medium_Grip",
                 "exercise_name": "Bench Press",
                 "target_weight_kg": 80.0,
                 "target_rpe": 7,
@@ -179,7 +180,13 @@ async def _setup_with_routine(session: object) -> tuple[int, date]:
     routine = WorkoutRoutine(user_id=user.id, name="PPL Split")
     day = RoutineDay(name="Push Day", order_index=0)
     day.exercises.append(
-        RoutineExercise(exercise_name="Bench Press", sets=4, rep_range="6-8", order_index=0)
+        RoutineExercise(
+            exercise_id="Barbell_Bench_Press_-_Medium_Grip",
+            exercise_name="Bench Press",
+            sets=4,
+            rep_range="6-8",
+            order_index=0,
+        )
     )
     routine.days.append(day)
     session.add(routine)  # type: ignore[union-attr]
@@ -358,9 +365,7 @@ class TestGenerateWeeklyPlan:
         """Materializing one week leaves an adjacent week's declared rows untouched."""
         async with test_session() as session:
             user_id, declared_week = await _setup_user_and_availability(session)
-            session.add(
-                DefaultAvailability(user_id=user_id, day_of_week=2, sport="padel")
-            )
+            session.add(DefaultAvailability(user_id=user_id, day_of_week=2, sport="padel"))
             await session.commit()
 
             other_week = date(2024, 6, 17)  # the following Monday, undeclared
@@ -446,9 +451,7 @@ class TestGenerateWeeklyPlan:
     async def test_all_gym_slots_no_cardio(self) -> None:
         """When all slots are gym, only gym adjustment calls are made."""
         async with test_session() as session:
-            user = User(
-                email="test@example.com", name="Test User", fitness_level="intermediate"
-            )
+            user = User(email="test@example.com", name="Test User", fitness_level="intermediate")
             session.add(user)
             await session.commit()
             await session.refresh(user)
@@ -466,7 +469,11 @@ class TestGenerateWeeklyPlan:
             day = RoutineDay(name="Full Body Day", order_index=0)
             day.exercises.append(
                 RoutineExercise(
-                    exercise_name="Squat", sets=4, rep_range="6-8", order_index=0
+                    exercise_id="Barbell_Squat",
+                    exercise_name="Squat",
+                    sets=4,
+                    rep_range="6-8",
+                    order_index=0,
                 )
             )
             routine.days.append(day)
@@ -477,7 +484,8 @@ class TestGenerateWeeklyPlan:
                 {
                     "exercises": [
                         {
-                            "exercise_name": "Squat",
+                            "exercise_id": "Barbell_Squat",
+                            "exercise_name": "Back Squat",
                             "target_weight_kg": 100.0,
                             "target_rpe": 8,
                             "rest_seconds": 180,
@@ -505,12 +513,17 @@ class TestGenerateWeeklyPlan:
 
             # Only 1 call (gym adjustment), no cardio plan
             assert client.call.call_count == 1
+            assert "Barbell_Squat" in client.call.call_args.kwargs["user_message"]
             result = await session.execute(
                 select(PlannedSession).where(PlannedSession.plan_id == plan.id)
             )
             sessions = list(result.scalars().all())
             assert len(sessions) == 1
             assert sessions[0].track == "gym"
+            details = json.loads(sessions[0].details)
+            assert details["exercises"][0]["exercise_id"] == "Barbell_Squat"
+            assert details["exercises"][0]["name"] == "Squat"
+            assert details["exercises"][0]["sets"] == 4
 
     async def test_sport_grouping_direct(self) -> None:
         """Slots are grouped by sport without LLM schedule distribution."""
@@ -536,7 +549,11 @@ class TestGenerateWeeklyPlan:
             day = RoutineDay(name="Push Day", order_index=0)
             day.exercises.append(
                 RoutineExercise(
-                    exercise_name="Bench Press", sets=3, rep_range="8-10", order_index=0
+                    exercise_id="Barbell_Bench_Press_-_Medium_Grip",
+                    exercise_name="Bench Press",
+                    sets=3,
+                    rep_range="8-10",
+                    order_index=0,
                 )
             )
             routine.days.append(day)

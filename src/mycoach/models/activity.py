@@ -57,6 +57,7 @@ class GymWorkoutDetail(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     activity_id: Mapped[int] = mapped_column(ForeignKey("activities.id"))
+    exercise_id: Mapped[str | None] = mapped_column(String(200), default=None, index=True)
     exercise_title: Mapped[str] = mapped_column(String(200))
     superset_id: Mapped[int | None] = mapped_column(default=None)
     exercise_notes: Mapped[str | None] = mapped_column(Text, default=None)

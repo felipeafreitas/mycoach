@@ -119,6 +119,40 @@ async def test_history_page_gym_details(client: AsyncClient) -> None:
     assert "x 8" in resp.text
 
 
+async def test_history_groups_renamed_exercise_by_stable_id(client: AsyncClient) -> None:
+    await _seed_user()
+    activity = await _seed_activity(title="Leg Day")
+
+    async with test_session() as session:
+        session.add_all(
+            [
+                GymWorkoutDetail(
+                    activity_id=activity.id,
+                    exercise_id="Barbell_Squat",
+                    exercise_title="Barbell Squat",
+                    set_index=1,
+                    weight_kg=100,
+                    reps=5,
+                ),
+                GymWorkoutDetail(
+                    activity_id=activity.id,
+                    exercise_id="Barbell_Squat",
+                    exercise_title="Back Squat",
+                    set_index=2,
+                    weight_kg=102.5,
+                    reps=5,
+                ),
+            ]
+        )
+        await session.commit()
+
+    resp = await client.get("/history")
+
+    assert resp.status_code == 200
+    assert resp.text.count("Barbell Squat</span>") == 1
+    assert "Back Squat</span>" not in resp.text
+
+
 async def test_history_page_metrics(client: AsyncClient) -> None:
     """History page shows HR and calorie metrics."""
     await _seed_user()

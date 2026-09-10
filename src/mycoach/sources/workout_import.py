@@ -17,6 +17,7 @@ class WorkoutSetImport:
 
     exercise_title: str
     set_index: int
+    exercise_id: str | None = None
     set_type: str = "normal"  # normal, warmup, dropset, failure
     superset_id: int | None = None
     exercise_notes: str | None = None

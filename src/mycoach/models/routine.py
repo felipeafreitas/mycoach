@@ -43,6 +43,7 @@ class RoutineExercise(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     routine_day_id: Mapped[int] = mapped_column(ForeignKey("routine_days.id", ondelete="CASCADE"))
+    exercise_id: Mapped[str | None] = mapped_column(String(200), default=None, index=True)
     exercise_name: Mapped[str] = mapped_column(String(200))
     sets: Mapped[int]
     rep_range: Mapped[str] = mapped_column(String(20))  # e.g. "8-10"

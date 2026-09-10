@@ -245,8 +245,13 @@ def _format_routine_summary(routine: dict[str, Any] | None) -> str:
     lines = [f"Routine: {routine['name']}"]
     for day in routine.get("days", []):
         day_names = [
-            "Monday", "Tuesday", "Wednesday", "Thursday",
-            "Friday", "Saturday", "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
         ]
         day_name = day_names[day["day_of_week"]] if day.get("day_of_week") is not None else "?"
         ex_count = len(day.get("exercises", []))
@@ -462,26 +467,23 @@ def _format_gym_details(details: list[dict[str, Any]]) -> str:
     if not details:
         return "No gym workout details (not a gym session or no data)."
     lines = []
-    current_exercise = ""
-    for d in details:
-        exercise = d.get("exercise_title", "Unknown")
-        if exercise != current_exercise:
-            current_exercise = exercise
-            lines.append(f"\n**{exercise}**")
-        set_type = d.get("set_type", "normal")
-        weight = d.get("weight_kg")
-        reps = d.get("reps")
-        rpe = d.get("rpe")
-        parts = [f"  Set {d.get('set_index', '?')}"]
-        if set_type != "normal":
-            parts.append(f"({set_type})")
-        if weight is not None:
-            parts.append(f"{weight}kg")
-        if reps is not None:
-            parts.append(f"x{reps}")
-        if rpe is not None:
-            parts.append(f"RPE {rpe}")
-        lines.append(" ".join(parts))
+    for exercise, sets in _group_exercise_details(details):
+        lines.append(f"\n**{exercise}**")
+        for d in sets:
+            set_type = d.get("set_type", "normal")
+            weight = d.get("weight_kg")
+            reps = d.get("reps")
+            rpe = d.get("rpe")
+            parts = [f"  Set {d.get('set_index', '?')}"]
+            if set_type != "normal":
+                parts.append(f"({set_type})")
+            if weight is not None:
+                parts.append(f"{weight}kg")
+            if reps is not None:
+                parts.append(f"x{reps}")
+            if rpe is not None:
+                parts.append(f"RPE {rpe}")
+            lines.append(" ".join(parts))
     return "\n".join(lines)
 
 
@@ -515,38 +517,39 @@ def _build_post_workout_schema(sport: str, has_planned: bool) -> str:
         ("performance_summary", "Brief overall assessment of the workout quality and effort"),
     ]
     if has_planned:
-        schema.append((
-            "planned_vs_actual",
-            "Comparison to planned session — adherence, deviations, and why",
-        ))
-    schema.extend([
-        (
-            "performance_trends",
-            "How this session compares to recent similar workouts"
-            " — improvements, regressions, plateaus",
-        ),
-        (
-            "hr_analysis",
-            "Heart rate zone analysis and cardiovascular response"
-            " (or 'No HR data available')",
-        ),
-        (
-            "training_effect_assessment",
-            "Assessment of aerobic/anaerobic training effect"
-            " and what it means for adaptation",
-        ),
-        ("key_highlights", '["List of 2-4 specific positive highlights"]'),
-        ("areas_for_improvement", '["List of 1-3 areas to work on next"]'),
-        (
-            "next_session_recommendations",
-            f"Specific recommendations for next workout ({rec_label})",
-        ),
-        (
-            "recovery_notes",
-            "Post-workout recovery recommendations"
-            " based on effort level and health context",
-        ),
-    ])
+        schema.append(
+            (
+                "planned_vs_actual",
+                "Comparison to planned session — adherence, deviations, and why",
+            )
+        )
+    schema.extend(
+        [
+            (
+                "performance_trends",
+                "How this session compares to recent similar workouts"
+                " — improvements, regressions, plateaus",
+            ),
+            (
+                "hr_analysis",
+                "Heart rate zone analysis and cardiovascular response (or 'No HR data available')",
+            ),
+            (
+                "training_effect_assessment",
+                "Assessment of aerobic/anaerobic training effect and what it means for adaptation",
+            ),
+            ("key_highlights", '["List of 2-4 specific positive highlights"]'),
+            ("areas_for_improvement", '["List of 1-3 areas to work on next"]'),
+            (
+                "next_session_recommendations",
+                f"Specific recommendations for next workout ({rec_label})",
+            ),
+            (
+                "recovery_notes",
+                "Post-workout recovery recommendations based on effort level and health context",
+            ),
+        ]
+    )
     lines = []
     for key, desc in schema:
         if desc.startswith("["):
@@ -581,8 +584,7 @@ def build_post_workout_prompt(
         "- SWOLF: swim efficiency = seconds + strokes per length. Lower = better.",
         "- EPOC: excess post-exercise oxygen consumption."
         " Indicates training load and recovery need.",
-        "- Training Effect: 1-2 minor, 2-3 maintaining,"
-        " 3-4 improving, 4-5 highly improving.",
+        "- Training Effect: 1-2 minor, 2-3 maintaining, 3-4 improving, 4-5 highly improving.",
         f"- Training Status: {ts_label}",
         "",
         "## Completed Activity",
@@ -595,25 +597,26 @@ def build_post_workout_prompt(
     if has_planned:
         sections.extend(["", "## Planned Session", _format_planned_session(planned_session)])
 
-    sections.extend([
-        "",
-        "## Recent Similar Activities (last 5 of same sport)",
-        _format_activities(similar_activities),
-        "",
-        "## Today's Health Context",
-        _format_health(health_context),
-        "",
-        "Provide a detailed post-workout analysis."
-        + (" Compare actual performance to the planned session." if has_planned else "")
-        + " Identify performance trends by comparing to recent similar workouts."
-        + " Be specific about what went well and what to improve.",
-        "",
-        "Respond with a JSON object matching this exact schema:",
-        _build_post_workout_schema(sport, has_planned),
-    ])
+    sections.extend(
+        [
+            "",
+            "## Recent Similar Activities (last 5 of same sport)",
+            _format_activities(similar_activities),
+            "",
+            "## Today's Health Context",
+            _format_health(health_context),
+            "",
+            "Provide a detailed post-workout analysis."
+            + (" Compare actual performance to the planned session." if has_planned else "")
+            + " Identify performance trends by comparing to recent similar workouts."
+            + " Be specific about what went well and what to improve.",
+            "",
+            "Respond with a JSON object matching this exact schema:",
+            _build_post_workout_schema(sport, has_planned),
+        ]
+    )
 
     return "\n".join(sections)
-
 
 
 def _fmt_kg(w: float | None) -> str:
@@ -621,6 +624,25 @@ def _fmt_kg(w: float | None) -> str:
     if w is None:
         return ""
     return f"{int(w)}kg" if w == int(w) else f"{w}kg"
+
+
+def _exercise_identity_key(detail: dict[str, Any]) -> str:
+    title = detail.get("exercise_title") or "Unknown"
+    return detail.get("exercise_id") or f"custom:{title}"
+
+
+def _group_exercise_details(
+    details: list[dict[str, Any]],
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Group by stable ID while retaining the first display title."""
+    grouped: dict[str, tuple[str, list[dict[str, Any]]]] = {}
+    for detail in details:
+        title = detail.get("exercise_title") or "Unknown"
+        key = _exercise_identity_key(detail)
+        if key not in grouped:
+            grouped[key] = (title, [])
+        grouped[key][1].append(detail)
+    return list(grouped.values())
 
 
 def _format_weekly_gym_details(details: list[dict[str, Any]]) -> str:
@@ -636,7 +658,7 @@ def _format_weekly_gym_details(details: list[dict[str, Any]]) -> str:
     )
     for d in details:
         key = (d.get("session_date") or "?", d.get("session_title") or "Session")
-        by_session[key][d.get("exercise_title") or "Unknown"].append(d)
+        by_session[key][_exercise_identity_key(d)].append(d)
 
     parts = []
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -652,7 +674,8 @@ def _format_weekly_gym_details(details: list[dict[str, Any]]) -> str:
             header = f"**{sess_date} — {sess_title}**"
 
         ex_lines = [header]
-        for ex_name, sets in exercises.items():
+        for sets in exercises.values():
+            ex_name = sets[0].get("exercise_title") or "Unknown"
             set_strs = []
             for s in sets:
                 w = s.get("weight_kg")
@@ -685,13 +708,17 @@ def _format_gym_history(history: list[dict[str, Any]]) -> str:
     from collections import defaultdict
 
     by_exercise: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    display_titles: dict[str, str] = {}
     for row in history:
-        by_exercise[row.get("exercise_title") or "Unknown"].append(row)
+        title = row.get("exercise_title") or "Unknown"
+        key = row.get("exercise_id") or f"custom:{title}"
+        display_titles.setdefault(key, title)
+        by_exercise[key].append(row)
 
     parts = []
-    for ex_name in sorted(by_exercise.keys()):
-        weeks_data = sorted(by_exercise[ex_name], key=lambda r: r.get("week_start") or "")
-        lines = [f"**{ex_name}**"]
+    for exercise_key in sorted(by_exercise, key=lambda key: display_titles[key].casefold()):
+        weeks_data = sorted(by_exercise[exercise_key], key=lambda r: r.get("week_start") or "")
+        lines = [f"**{display_titles[exercise_key]}**"]
         for row in weeks_data:
             w_start = row.get("week_start", "?")
             try:
@@ -874,16 +901,22 @@ def _format_routine_exercises(exercises: list[dict[str, Any]]) -> str:
             label = group_labels[sg]
             for j, gex in enumerate(superset_groups[sg]):
                 suffix = chr(ord("a") + j)
+                exercise_id = gex.get("exercise_id") or "custom"
                 line = (
                     f"{num}{suffix}. {gex['exercise_name']} — "
-                    f"{gex['sets']} sets x {gex['rep_range']} [Superset {label}]"
+                    f"{gex['sets']} sets x {gex['rep_range']} "
+                    f"[exercise_id: {exercise_id}] [Superset {label}]"
                 )
                 if gex.get("notes"):
                     line += f" ({gex['notes']})"
                 lines.append(line)
         else:
             num += 1
-            line = f"{num}. {ex['exercise_name']} — {ex['sets']} sets x {ex['rep_range']}"
+            exercise_id = ex.get("exercise_id") or "custom"
+            line = (
+                f"{num}. {ex['exercise_name']} — {ex['sets']} sets x {ex['rep_range']} "
+                f"[exercise_id: {exercise_id}]"
+            )
             if ex.get("notes"):
                 line += f" ({ex['notes']})"
             lines.append(line)
@@ -896,23 +929,20 @@ def _format_gym_performance(performance: list[dict[str, Any]]) -> str:
     if not performance:
         return "No data from last week (first week or no logged gym sessions)."
     lines = []
-    current_exercise = ""
-    for d in performance:
-        exercise = d.get("exercise_title", "Unknown")
-        if exercise != current_exercise:
-            current_exercise = exercise
-            lines.append(f"\n**{exercise}**")
-        weight = d.get("weight_kg")
-        reps = d.get("reps")
-        rpe = d.get("rpe")
-        parts = [f"  Set {d.get('set_index', '?')}:"]
-        if weight is not None:
-            parts.append(f"{weight}kg")
-        if reps is not None:
-            parts.append(f"x{reps}")
-        if rpe is not None:
-            parts.append(f"RPE {rpe}")
-        lines.append(" ".join(parts))
+    for exercise, sets in _group_exercise_details(performance):
+        lines.append(f"\n**{exercise}**")
+        for d in sets:
+            weight = d.get("weight_kg")
+            reps = d.get("reps")
+            rpe = d.get("rpe")
+            parts = [f"  Set {d.get('set_index', '?')}:"]
+            if weight is not None:
+                parts.append(f"{weight}kg")
+            if reps is not None:
+                parts.append(f"x{reps}")
+            if rpe is not None:
+                parts.append(f"RPE {rpe}")
+            lines.append(" ".join(parts))
     return "\n".join(lines)
 
 
@@ -1043,23 +1073,20 @@ def _format_last_week_training_log(activities: list[dict[str, Any]]) -> str:
         # Append gym set details if present
         gym_details = a.get("gym_details")
         if gym_details:
-            current_ex = ""
-            for d in gym_details:
-                ex = d.get("exercise_title", "Unknown")
-                if ex != current_ex:
-                    current_ex = ex
-                    parts.append(f"  **{ex}**")
-                w = d.get("weight_kg")
-                r = d.get("reps")
-                rpe = d.get("rpe")
-                set_parts = [f"    Set {d.get('set_index', '?')}:"]
-                if w is not None:
-                    set_parts.append(f"{w}kg")
-                if r is not None:
-                    set_parts.append(f"x{r}")
-                if rpe is not None:
-                    set_parts.append(f"RPE {rpe}")
-                parts.append(" ".join(set_parts))
+            for ex, sets in _group_exercise_details(gym_details):
+                parts.append(f"  **{ex}**")
+                for d in sets:
+                    w = d.get("weight_kg")
+                    r = d.get("reps")
+                    rpe = d.get("rpe")
+                    set_parts = [f"    Set {d.get('set_index', '?')}:"]
+                    if w is not None:
+                        set_parts.append(f"{w}kg")
+                    if r is not None:
+                        set_parts.append(f"x{r}")
+                    if rpe is not None:
+                        set_parts.append(f"RPE {rpe}")
+                    parts.append(" ".join(set_parts))
     return "\n".join(parts)
 
 
@@ -1105,5 +1132,3 @@ def build_cardio_plan_prompt(
         or "No mesocycle configured. Use general progressive programming.",
         sport_profiles=_format_sport_profiles(sport_profiles or []),
     )
-
-

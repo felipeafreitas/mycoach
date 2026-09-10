@@ -7,14 +7,16 @@ validation, and converts to them via ``to_dataclass()`` for the importer.
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from mycoach.exercise_catalogue import is_known_exercise_id
 from mycoach.sources.workout_import import WorkoutImport, WorkoutSetImport
 
 SetType = Literal["normal", "warmup", "dropset", "failure"]
 
 
 class WorkoutSetIn(BaseModel):
+    exercise_id: str | None = Field(default=None, max_length=200)
     exercise_title: str = Field(min_length=1, max_length=200)
     set_index: int = Field(ge=0)
     set_type: SetType = "normal"
@@ -28,8 +30,16 @@ class WorkoutSetIn(BaseModel):
     prescribed_weight_kg: float | None = Field(default=None, ge=0)
     prescribed_reps: int | None = Field(default=None, ge=0)
 
+    @field_validator("exercise_id")
+    @classmethod
+    def validate_exercise_id(cls, value: str | None) -> str | None:
+        if value is not None and not is_known_exercise_id(value):
+            raise ValueError("unknown exercise_id")
+        return value
+
     def to_dataclass(self) -> WorkoutSetImport:
         return WorkoutSetImport(
+            exercise_id=self.exercise_id,
             exercise_title=self.exercise_title.strip(),
             set_index=self.set_index,
             set_type=self.set_type,
