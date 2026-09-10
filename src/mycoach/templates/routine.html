@@ -32,6 +32,11 @@
 </style>
 
 <div class="space-y-6 pb-20 sm:pb-6">
+    <datalist id="routine-exercises">
+        {% for exercise in exercise_catalogue %}
+        <option value="{{ exercise.name }}"></option>
+        {% endfor %}
+    </datalist>
     <div>
         <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Gym routine · split</p>
         <h1 class="text-2xl font-bold text-zinc-50 mt-0.5">Gym Routine</h1>
@@ -60,13 +65,13 @@
                 </div>
                 <div class="exercises-container space-y-1">
                     {% for ex in day.exercises %}
-                    <div class="exercise exercise-row flex items-center gap-2 {% if ex.superset_group is not none %}supersetted{% endif %}" data-superset-group="{{ ex.superset_group if ex.superset_group is not none else '' }}">
+                    <div class="exercise exercise-row flex items-center gap-2 {% if ex.superset_group is not none %}supersetted{% endif %}" data-superset-group="{{ ex.superset_group if ex.superset_group is not none else '' }}" data-exercise-id="{{ ex.exercise_id or '' }}" data-original-name="{{ ex.exercise_name }}">
                         <button type="button" class="superset-toggle flex-shrink-0 w-6 h-6 rounded text-xs font-bold flex items-center justify-center border
                             {% if ex.superset_group is not none %}superset-badge superset-badge-{{ ['a','b','c','d'][ex.superset_group % 4] }}{% else %}border-white/15 text-zinc-500 hover:border-purple-400 hover:text-purple-300{% endif %}"
                             title="Toggle superset">
                             {% if ex.superset_group is not none %}{{ ['A','B','C','D'][ex.superset_group % 4] }}{% else %}S{% endif %}
                         </button>
-                        <input type="text" class="ex-name flex-1 rounded-lg text-sm px-2 py-1.5" value="{{ ex.exercise_name }}" placeholder="Exercise name">
+                        <input type="text" class="ex-name flex-1 rounded-lg text-sm px-2 py-1.5" value="{{ ex.exercise_name }}" list="routine-exercises" placeholder="Exercise name">
                         <input type="number" class="ex-sets w-16 rounded-lg text-sm px-2 py-1.5" value="{{ ex.sets }}" placeholder="Sets" min="1">
                         <input type="text" class="ex-reps w-20 rounded-lg text-sm px-2 py-1.5" value="{{ ex.rep_range }}" placeholder="Reps">
                         <button type="button" class="remove-exercise text-red-400/70 hover:text-red-300 text-xs">&#10005;</button>
@@ -96,6 +101,7 @@
 <script>
 (function() {
     var container = document.getElementById('days-container');
+    var exerciseCatalogue = {{ exercise_catalogue | tojson }};
     var supersetColors = ['a', 'b', 'c', 'd'];
     var supersetLabels = ['A', 'B', 'C', 'D'];
 
@@ -104,6 +110,8 @@
         var hasSS = supersetGroup !== null && supersetGroup !== undefined && supersetGroup !== '';
         div.className = 'exercise exercise-row flex items-center gap-2' + (hasSS ? ' supersetted' : '');
         div.dataset.supersetGroup = hasSS ? supersetGroup : '';
+        div.dataset.exerciseId = '';
+        div.dataset.originalName = name || '';
 
         var btnClass = hasSS
             ? 'superset-badge superset-badge-' + supersetColors[supersetGroup % 4]
@@ -112,7 +120,7 @@
 
         div.innerHTML =
             '<button type="button" class="superset-toggle flex-shrink-0 w-6 h-6 rounded text-xs font-bold flex items-center justify-center border ' + btnClass + '" title="Toggle superset">' + btnLabel + '</button>' +
-            '<input type="text" class="ex-name flex-1 rounded-lg text-sm px-2 py-1.5" value="' + (name||'') + '" placeholder="Exercise name">' +
+            '<input type="text" class="ex-name flex-1 rounded-lg text-sm px-2 py-1.5" value="' + (name||'') + '" list="routine-exercises" placeholder="Exercise name">' +
             '<input type="number" class="ex-sets w-16 rounded-lg text-sm px-2 py-1.5" value="' + (sets||3) + '" placeholder="Sets" min="1">' +
             '<input type="text" class="ex-reps w-20 rounded-lg text-sm px-2 py-1.5" value="' + (reps||'8-10') + '" placeholder="Reps">' +
             '<button type="button" class="remove-exercise text-red-400/70 hover:text-red-300 text-xs">&#10005;</button>';
@@ -199,6 +207,16 @@
         }
     }
 
+    function resolveExerciseId(exerciseRow, name) {
+        if (name === exerciseRow.dataset.originalName && exerciseRow.dataset.exerciseId) {
+            return exerciseRow.dataset.exerciseId;
+        }
+        var match = exerciseCatalogue.find(function(exercise) {
+            return exercise.name.toLocaleLowerCase() === name.toLocaleLowerCase();
+        });
+        return match ? match.id : null;
+    }
+
     document.getElementById('add-day').addEventListener('click', function() {
         var day = createDayBlock();
         container.appendChild(day);
@@ -246,6 +264,7 @@
                 if (name) {
                     var sg = exEl.dataset.supersetGroup;
                     exercises.push({
+                        exercise_id: resolveExerciseId(exEl, name),
                         exercise_name: name,
                         sets: parseInt(exEl.querySelector('.ex-sets').value) || 3,
                         rep_range: exEl.querySelector('.ex-reps').value || '8-10',

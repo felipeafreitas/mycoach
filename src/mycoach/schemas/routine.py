@@ -1,15 +1,25 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from mycoach.exercise_catalogue import is_known_exercise_id
 
 
 class RoutineExerciseBase(BaseModel):
+    exercise_id: str | None = Field(default=None, max_length=200)
     exercise_name: str = Field(max_length=200)
     sets: int = Field(gt=0)
     rep_range: str = Field(max_length=20)  # e.g. "8-10"
     order_index: int = Field(ge=0, default=0)
     notes: str | None = None
     superset_group: int | None = None
+
+    @field_validator("exercise_id")
+    @classmethod
+    def validate_exercise_id(cls, value: str | None) -> str | None:
+        if value is not None and not is_known_exercise_id(value):
+            raise ValueError("unknown exercise_id")
+        return value
 
 
 class RoutineDayBase(BaseModel):

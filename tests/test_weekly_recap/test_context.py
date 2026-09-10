@@ -2,8 +2,13 @@
 
 from datetime import date, datetime
 
-from mycoach.coaching.context import get_activities_for_week, get_plan_adherence_for_week
-from mycoach.models.activity import Activity
+from mycoach.coaching.context import (
+    get_activities_for_week,
+    get_gym_details_for_week,
+    get_gym_performance_history,
+    get_plan_adherence_for_week,
+)
+from mycoach.models.activity import Activity, GymWorkoutDetail
 from mycoach.models.plan import PlannedSession, WeeklyPlan
 from mycoach.models.user import User
 from tests.conftest import test_session
@@ -165,3 +170,88 @@ class TestGetActivitiesForWeek:
             user_id = await _create_user(session)
             result = await get_activities_for_week(session, user_id, date(2024, 6, 10))
             assert result == []
+
+
+class TestGetGymPerformanceHistory:
+    async def test_aggregates_by_id_and_skips_custom_exercises(self) -> None:
+        async with test_session() as session:
+            user_id = await _create_user(session)
+            activity = Activity(
+                user_id=user_id,
+                title="Legs",
+                sport="gym",
+                start_time=datetime(2024, 6, 10, 9, 0),
+                data_source="logger",
+            )
+            session.add(activity)
+            await session.flush()
+            session.add_all(
+                [
+                    GymWorkoutDetail(
+                        activity_id=activity.id,
+                        exercise_id="Barbell_Squat",
+                        exercise_title="Barbell Squat",
+                        set_index=1,
+                        weight_kg=100,
+                        reps=5,
+                    ),
+                    GymWorkoutDetail(
+                        activity_id=activity.id,
+                        exercise_id="Barbell_Squat",
+                        exercise_title="Back Squat",
+                        set_index=2,
+                        weight_kg=105,
+                        reps=3,
+                    ),
+                    GymWorkoutDetail(
+                        activity_id=activity.id,
+                        exercise_id=None,
+                        exercise_title="Unlisted Machine",
+                        set_index=3,
+                        weight_kg=50,
+                        reps=10,
+                    ),
+                ]
+            )
+            await session.commit()
+
+            result = await get_gym_performance_history(session, user_id, date(2024, 6, 17), weeks=1)
+
+            assert result == [
+                {
+                    "week_start": "2024-06-10",
+                    "exercise_id": "Barbell_Squat",
+                    "exercise_title": "Barbell Squat",
+                    "best_weight_kg": 105,
+                    "best_reps": 3,
+                    "total_sets": 2,
+                    "avg_rpe": None,
+                }
+            ]
+
+    async def test_raw_recap_details_keep_custom_exercise_title(self) -> None:
+        async with test_session() as session:
+            user_id = await _create_user(session)
+            activity = Activity(
+                user_id=user_id,
+                title="Accessories",
+                sport="gym",
+                start_time=datetime(2024, 6, 11, 9, 0),
+                data_source="logger",
+            )
+            session.add(activity)
+            await session.flush()
+            session.add(
+                GymWorkoutDetail(
+                    activity_id=activity.id,
+                    exercise_id=None,
+                    exercise_title="Unlisted Machine",
+                    set_index=1,
+                )
+            )
+            await session.commit()
+
+            result = await get_gym_details_for_week(session, user_id, date(2024, 6, 10))
+
+            assert result[0]["exercise_id"] is None
+            assert result[0]["exercise_title"] == "Unlisted Machine"

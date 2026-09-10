@@ -48,6 +48,7 @@ from mycoach.coaching.recovery_data import missing_recovery_data
 from mycoach.coaching.response_parser import (
     CardioPlanResponse,
     DailyBriefingResponse,
+    GymAdjustmentExercise,
     GymAdjustmentResponse,
     PostWorkoutResponse,
     WeeklyRecapResponse,
@@ -237,7 +238,11 @@ class CoachingEngine:
                 try:
                     llm_response = self._llm.call(
                         system=system,
-                        user_message=user_message + f"\n\nIMPORTANT: Respond ONLY with valid JSON. Your previous response had this error: {error_msg}",
+                        user_message=(
+                            user_message
+                            + "\n\nIMPORTANT: Respond ONLY with valid JSON. "
+                            + f"Your previous response had this error: {error_msg}"
+                        ),
                         model=model,
                         max_tokens=retry_tokens,
                     )
@@ -273,9 +278,7 @@ class CoachingEngine:
 
         default_slots = await get_default_availability(session, user_id)
         if not default_slots:
-            raise NoAvailabilityConfigured(
-                f"No availability configured for week of {week_start}"
-            )
+            raise NoAvailabilityConfigured(f"No availability configured for week of {week_start}")
 
         for slot in default_slots:
             session.add(
@@ -343,9 +346,7 @@ class CoachingEngine:
         # 2. Fetch routine + sport profiles + last week's full training log
         routine = await get_active_routine(session, user_id)
         sport_profiles = await get_sport_profiles(session, user_id)
-        last_week_activities = await get_last_week_all_activities(
-            session, user_id, week_start
-        )
+        last_week_activities = await get_last_week_all_activities(session, user_id, week_start)
 
         # 3. Split slots by user-assigned sport
         gym_slots = [s for s in availability if s.get("sport") == "gym"]
@@ -371,7 +372,10 @@ class CoachingEngine:
         # 4. GYM TRACK — one LLM call per gym slot (cycle routine days if needed)
         for i, slot in enumerate(gym_slots):
             if not sorted_routine_days:
-                logger.warning("No routine days defined, skipping gym slot day %d", slot["day_of_week"])
+                logger.warning(
+                    "No routine days defined, skipping gym slot day %d",
+                    slot["day_of_week"],
+                )
                 continue
             routine_day = sorted_routine_days[i % len(sorted_routine_days)]
 
@@ -413,30 +417,39 @@ class CoachingEngine:
                 all_raw_outputs.append(llm_response.content)
 
             if parsed is not None:
-                # Build details combining routine exercises + LLM adjustments
+                # Build from the routine so a hallucinated response can never
+                # invent a prescribed exercise. Names remain display labels;
+                # the echoed catalogue id is the only matching key.
                 exercises_detail = []
-                for ex in parsed.exercises:
-                    routine_ex = next(
-                        (
-                            r
-                            for r in routine_day["exercises"]
-                            if r["exercise_name"] == ex.exercise_name
-                        ),
-                        None,
-                    )
+                known_ids = {
+                    ex["exercise_id"]
+                    for ex in routine_day["exercises"]
+                    if ex.get("exercise_id") is not None
+                }
+                adjustments: dict[str, GymAdjustmentExercise] = {}
+                for adjustment in parsed.exercises:
+                    if adjustment.exercise_id not in known_ids:
+                        logger.warning(
+                            "Ignoring gym adjustment for unknown exercise_id %r",
+                            adjustment.exercise_id,
+                        )
+                        continue
+                    adjustments.setdefault(adjustment.exercise_id, adjustment)
+
+                for routine_ex in routine_day["exercises"]:
+                    ex = adjustments.get(routine_ex.get("exercise_id"))
                     exercises_detail.append(
                         {
-                            "name": ex.exercise_name,
-                            "target_weight_kg": ex.target_weight_kg,
-                            "sets": routine_ex["sets"] if routine_ex else None,
-                            "reps": routine_ex["rep_range"] if routine_ex else None,
-                            "rpe": ex.target_rpe,
-                            "rest_seconds": ex.rest_seconds,
-                            "adjustment_rationale": ex.adjustment_rationale,
-                            "notes": ex.notes,
-                            "superset_group": (
-                                routine_ex.get("superset_group") if routine_ex else None
-                            ),
+                            "exercise_id": routine_ex.get("exercise_id"),
+                            "name": routine_ex["exercise_name"],
+                            "target_weight_kg": ex.target_weight_kg if ex else None,
+                            "sets": routine_ex["sets"],
+                            "reps": routine_ex["rep_range"],
+                            "rpe": ex.target_rpe if ex else None,
+                            "rest_seconds": ex.rest_seconds if ex else None,
+                            "adjustment_rationale": ex.adjustment_rationale if ex else None,
+                            "notes": ex.notes if ex else routine_ex.get("notes"),
+                            "superset_group": routine_ex.get("superset_group"),
                         }
                     )
 
@@ -459,6 +472,7 @@ class CoachingEngine:
                 )
                 exercises_detail = [
                     {
+                        "exercise_id": ex.get("exercise_id"),
                         "name": ex["exercise_name"],
                         "sets": ex["sets"],
                         "reps": ex["rep_range"],
@@ -482,9 +496,7 @@ class CoachingEngine:
         # 5. CARDIO TRACK — single LLM call (weekly model, creative task)
         if cardio_slots:
             last_cardio = await get_last_week_cardio_performance(session, user_id, week_start)
-            health_trends_list = await get_health_trends(
-                session, user_id, days=7, today=week_start
-            )
+            health_trends_list = await get_health_trends(session, user_id, days=7, today=week_start)
 
             user_message = build_cardio_plan_prompt(
                 cardio_slots=cardio_slots,

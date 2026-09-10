@@ -142,7 +142,6 @@ async def get_mesocycle_context(session: AsyncSession, user_id: int) -> str | No
     return "Current mesocycle status:\n" + "\n".join(parts)
 
 
-
 async def get_plan_adherence_for_week(
     session: AsyncSession, user_id: int, week_start: date
 ) -> dict[str, Any] | None:
@@ -174,13 +173,10 @@ async def get_plan_adherence_for_week(
     sessions = sessions_result.scalars().all()
 
     # Cross-reference actual activities to detect completions missed by post-workout flow
-    activities_stmt = (
-        select(Activity)
-        .where(
-            Activity.user_id == user_id,
-            Activity.start_time >= week_start.isoformat(),
-            Activity.start_time < (week_start + timedelta(days=7)).isoformat(),
-        )
+    activities_stmt = select(Activity).where(
+        Activity.user_id == user_id,
+        Activity.start_time >= week_start.isoformat(),
+        Activity.start_time < (week_start + timedelta(days=7)).isoformat(),
     )
     activities_result = await session.execute(activities_stmt)
     activities = activities_result.scalars().all()
@@ -189,13 +185,13 @@ async def get_plan_adherence_for_week(
     for act in activities:
         from datetime import datetime as dt
 
-        act_dt = dt.fromisoformat(act.start_time) if isinstance(act.start_time, str) else act.start_time
+        act_dt = (
+            dt.fromisoformat(act.start_time) if isinstance(act.start_time, str) else act.start_time
+        )
         done_set.add((act_dt.date().weekday(), act.sport))
 
     total = len(sessions)
-    completed = sum(
-        1 for s in sessions if s.completed or (s.day_of_week, s.sport) in done_set
-    )
+    completed = sum(1 for s in sessions if s.completed or (s.day_of_week, s.sport) in done_set)
     adherence_pct = round(completed / total * 100, 1) if total > 0 else 0.0
 
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -264,6 +260,7 @@ async def get_activity_with_details(
         for d in detail_result.scalars().all():
             gym_details.append(
                 {
+                    "exercise_id": d.exercise_id,
                     "exercise_title": d.exercise_title,
                     "set_index": d.set_index,
                     "set_type": d.set_type,
@@ -397,6 +394,7 @@ async def get_active_routine(session: AsyncSession, user_id: int) -> dict[str, A
                 "order_index": day.order_index,
                 "exercises": [
                     {
+                        "exercise_id": ex.exercise_id,
                         "exercise_name": ex.exercise_name,
                         "sets": ex.sets,
                         "rep_range": ex.rep_range,
@@ -414,12 +412,12 @@ async def get_active_routine(session: AsyncSession, user_id: int) -> dict[str, A
 async def get_last_week_gym_performance(
     session: AsyncSession,
     user_id: int,
-    exercise_names: list[str],
+    exercise_ids: list[str],
     week_start: date,
 ) -> list[dict[str, Any]]:
     """Get last week's gym workout details for specific exercises.
 
-    Returns a list of dicts with exercise_title, set_index, weight_kg, reps, rpe.
+    Returns a list of dicts with exercise identity, display title, and set values.
     """
     prev_week_start = week_start - timedelta(days=7)
     prev_week_end = week_start
@@ -442,14 +440,15 @@ async def get_last_week_gym_performance(
         select(GymWorkoutDetail)
         .where(
             GymWorkoutDetail.activity_id.in_(activity_ids),
-            GymWorkoutDetail.exercise_title.in_(exercise_names),
+            GymWorkoutDetail.exercise_id.in_(exercise_ids),
         )
-        .order_by(GymWorkoutDetail.exercise_title, GymWorkoutDetail.set_index)
+        .order_by(GymWorkoutDetail.exercise_id, GymWorkoutDetail.set_index)
     )
     detail_result = await session.execute(detail_stmt)
 
     return [
         {
+            "exercise_id": d.exercise_id,
             "exercise_title": d.exercise_title,
             "set_index": d.set_index,
             "weight_kg": d.weight_kg,
@@ -492,11 +491,12 @@ async def get_last_week_all_activities(
             detail_stmt = (
                 select(GymWorkoutDetail)
                 .where(GymWorkoutDetail.activity_id == a.id)
-                .order_by(GymWorkoutDetail.exercise_title, GymWorkoutDetail.set_index)
+                .order_by(GymWorkoutDetail.exercise_id, GymWorkoutDetail.set_index)
             )
             detail_result = await session.execute(detail_stmt)
             d["gym_details"] = [
                 {
+                    "exercise_id": det.exercise_id,
                     "exercise_title": det.exercise_title,
                     "set_index": det.set_index,
                     "weight_kg": det.weight_kg,
@@ -535,8 +535,14 @@ async def get_health_trends_averaged(
         return {}
 
     numeric_fields = [
-        "resting_hr", "avg_hr", "hrv_status", "sleep_duration_minutes",
-        "sleep_score", "avg_stress", "training_readiness", "training_load",
+        "resting_hr",
+        "avg_hr",
+        "hrv_status",
+        "sleep_duration_minutes",
+        "sleep_score",
+        "avg_stress",
+        "training_readiness",
+        "training_load",
         "body_battery_morning",
     ]
     text_fields = ["training_status", "hrv_status_text", "load_focus"]
@@ -587,15 +593,9 @@ async def get_last_week_cardio_performance(
     return [activity_to_dict(a) for a in result.scalars().all()]
 
 
-async def get_sport_profiles(
-    session: AsyncSession, user_id: int
-) -> list[dict[str, Any]]:
+async def get_sport_profiles(session: AsyncSession, user_id: int) -> list[dict[str, Any]]:
     """Get all sport profiles for a user as a list of dicts."""
-    stmt = (
-        select(SportProfile)
-        .where(SportProfile.user_id == user_id)
-        .order_by(SportProfile.sport)
-    )
+    stmt = select(SportProfile).where(SportProfile.user_id == user_id).order_by(SportProfile.sport)
     result = await session.execute(stmt)
     return [
         {
@@ -682,7 +682,7 @@ async def get_gym_details_for_week(
 ) -> list[dict[str, Any]]:
     """Get all gym set/rep/weight details for every gym session in the given week.
 
-    Returns list of dicts: {session_date, exercise_title, set_index, set_type, weight_kg, reps, rpe}
+    Returns set-level dicts including stable exercise ID and display title,
     sorted by session date, then exercise, then set index.
     """
     week_end = week_start + timedelta(days=7)
@@ -704,7 +704,7 @@ async def get_gym_details_for_week(
         detail_stmt = (
             select(GymWorkoutDetail)
             .where(GymWorkoutDetail.activity_id == act.id)
-            .order_by(GymWorkoutDetail.exercise_title, GymWorkoutDetail.set_index)
+            .order_by(GymWorkoutDetail.exercise_id, GymWorkoutDetail.set_index)
         )
         detail_result = await session.execute(detail_stmt)
         for d in detail_result.scalars().all():
@@ -712,6 +712,7 @@ async def get_gym_details_for_week(
                 {
                     "session_date": str(act.start_time)[:10] if act.start_time else None,
                     "session_title": act.title,
+                    "exercise_id": d.exercise_id,
                     "exercise_title": d.exercise_title,
                     "set_index": d.set_index,
                     "set_type": d.set_type,
@@ -728,8 +729,8 @@ async def get_gym_performance_history(
 ) -> list[dict[str, Any]]:
     """Get per-exercise aggregated performance for N weeks before week_start.
 
-    Returns list of {week_start, exercise_title, best_weight_kg, best_reps, total_sets, avg_rpe},
-    sorted by week_start asc, then exercise name.  Used for plateau detection.
+    Returns id-keyed catalogue exercises only. Custom (null-id) exercises stay
+    visible in raw recap details but do not participate in cross-week reasoning.
     """
     rows: list[dict[str, Any]] = []
     for i in range(weeks, 0, -1):
@@ -751,7 +752,7 @@ async def get_gym_performance_history(
         detail_stmt = (
             select(GymWorkoutDetail)
             .where(GymWorkoutDetail.activity_id.in_(activity_ids))
-            .order_by(GymWorkoutDetail.exercise_title, GymWorkoutDetail.set_index)
+            .order_by(GymWorkoutDetail.exercise_id, GymWorkoutDetail.set_index)
         )
         detail_result = await session.execute(detail_stmt)
         details = detail_result.scalars().all()
@@ -759,16 +760,18 @@ async def get_gym_performance_history(
         # Aggregate per exercise
         by_exercise: dict[str, dict[str, Any]] = {}
         for d in details:
-            ex = d.exercise_title or "Unknown"
-            if ex not in by_exercise:
-                by_exercise[ex] = {
+            if d.exercise_id is None:
+                continue
+            if d.exercise_id not in by_exercise:
+                by_exercise[d.exercise_id] = {
+                    "exercise_title": d.exercise_title,
                     "best_weight_kg": None,
                     "best_reps": None,
                     "total_sets": 0,
                     "rpe_sum": 0.0,
                     "rpe_count": 0,
                 }
-            entry = by_exercise[ex]
+            entry = by_exercise[d.exercise_id]
             entry["total_sets"] += 1
             w = d.weight_kg
             r = d.reps
@@ -779,14 +782,13 @@ async def get_gym_performance_history(
                 entry["rpe_sum"] += d.rpe
                 entry["rpe_count"] += 1
 
-        for ex_name, agg in sorted(by_exercise.items()):
-            avg_rpe = (
-                round(agg["rpe_sum"] / agg["rpe_count"], 1) if agg["rpe_count"] > 0 else None
-            )
+        for exercise_id, agg in sorted(by_exercise.items()):
+            avg_rpe = round(agg["rpe_sum"] / agg["rpe_count"], 1) if agg["rpe_count"] > 0 else None
             rows.append(
                 {
                     "week_start": str(w_start),
-                    "exercise_title": ex_name,
+                    "exercise_id": exercise_id,
+                    "exercise_title": agg["exercise_title"],
                     "best_weight_kg": agg["best_weight_kg"],
                     "best_reps": agg["best_reps"],
                     "total_sets": agg["total_sets"],

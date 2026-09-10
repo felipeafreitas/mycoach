@@ -38,7 +38,6 @@ class PostWorkoutResponse(BaseModel):
     recovery_notes: str
 
 
-
 class GymDayCoaching(BaseModel):
     day_label: str
     exercises: list[str] = Field(min_length=1)
@@ -78,6 +77,7 @@ class ScheduleDistributionResponse(BaseModel):
 
 
 class GymAdjustmentExercise(BaseModel):
+    exercise_id: str | None = None
     exercise_name: str
     target_weight_kg: float | None = None
     target_rpe: int | None = Field(default=None, ge=1, le=10)

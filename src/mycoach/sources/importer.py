@@ -10,6 +10,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mycoach.exercise_catalogue import exercise_id_for_name
 from mycoach.models.activity import Activity, GymWorkoutDetail
 from mycoach.sources.base import ImportResult
 from mycoach.sources.workout_import import WorkoutImport
@@ -98,6 +99,7 @@ async def import_workouts(
             session.add(
                 GymWorkoutDetail(
                     activity_id=activity.id,
+                    exercise_id=s.exercise_id or exercise_id_for_name(s.exercise_title),
                     exercise_title=s.exercise_title,
                     superset_id=s.superset_id,
                     exercise_notes=s.exercise_notes,
