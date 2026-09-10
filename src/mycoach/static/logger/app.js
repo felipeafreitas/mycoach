@@ -164,6 +164,27 @@
         return m ? parseInt(m[1], 10) : null;
     }
 
+    /* The heaviest working (non-warmup) set in an exercise, ties going to the
+       first set reached at that weight. A bodyweight exercise with no logged
+       weight still has a top set — the first working set — since every entry
+       there is tied at "no weight". Exercises with no working sets have none. */
+    function topSetForExercise(ex) {
+        var working = ex.sets.filter(function (set) { return (set.set_type || "normal") !== "warmup"; });
+        if (!working.length) return null;
+        var top = working[0];
+        var topWeight = top.weight_kg != null ? top.weight_kg : -Infinity;
+        for (var i = 1; i < working.length; i++) {
+            var weight = working[i].weight_kg != null ? working[i].weight_kg : -Infinity;
+            if (weight > topWeight) { top = working[i]; topWeight = weight; }
+        }
+        return top;
+    }
+
+    /* rir "3+" has no exact RPE — writing null is honest, a naive 7 would be
+       false precision GymWorkoutDetail.rpe doesn't need (it already has an
+       established null-handling path for Hevy history / manual entry). */
+    var RIR_TO_RPE = { "0": 10, "1": 9, "2": 8, "3+": null };
+
     /* Flatten a stored session to the canonical WorkoutImport payload. */
     function toPayload(s) {
         var sets = [];
@@ -450,7 +471,7 @@
             setActionbar([
                 el("button", { class: "iconbtn", "aria-label": "Cancel session", onclick: function () { confirmCancel(s); } }, ["✕"]),
                 el("button", { class: "btn btn--ghost", onclick: function () { openAddExercise(s); } }, ["＋ Exercise"]),
-                el("button", { class: "btn btn--primary", style: "flex:2", onclick: function () { finishSession(s); } }, ["Finish"]),
+                el("button", { class: "btn btn--primary", style: "flex:2", onclick: function () { promptFinish(s); } }, ["Finish"]),
             ]);
         }
     }
@@ -587,7 +608,6 @@
             el("span", {}),
             el("span", { text: "kg" }),
             el("span", { text: "reps" }),
-            el("span", { text: "rpe" }),
             el("span", {}),
         ]);
     }
@@ -636,13 +656,8 @@
             { class: "input input--cell mono", type: "number", inputmode: "numeric", min: "0", placeholder: "—", "aria-label": "Reps", value: set.reps != null ? set.reps : "" },
             function (v) { set.reps = numOrNull(v, function (x) { return parseInt(x, 10); }); }
         );
-        var rpe = cell(
-            { class: "input input--cell mono", type: "number", inputmode: "decimal", step: "0.5", min: "1", max: "10", placeholder: "—", "aria-label": "RPE", value: set.rpe != null ? set.rpe : "" },
-            function (v) { set.rpe = numOrNull(v, parseFloat); }
-        );
-
         var row = el("div", { class: "setrow setrow--edit" }, [
-            badge, weight, reps, rpe,
+            badge, weight, reps,
             el("button", { class: "iconbtn setrow__del", "aria-label": "Delete set", onclick: function () { removeSet(s, ex, card, set, row); } }, ["✕"]),
         ]);
         return row;
@@ -880,14 +895,67 @@
         }, 220);
     }
 
-    function finishSession(s) {
-        /* Rows appear prefilled and are stored immediately, so a tapped-then-
-           abandoned row is a set with nothing in it. It is not data — and a
-           null weight *and* null reps would poison the 1RM estimates the
-           coaching prompts read — so it is dropped rather than synced. */
-        s.exercises.forEach(function (ex) {
+    /* Rows appear prefilled and are stored immediately, so a tapped-then-
+       abandoned row is a set with nothing in it. It is not data — and a
+       null weight *and* null reps would poison the 1RM estimates the
+       coaching prompts read — so it is dropped rather than synced. */
+    function pruneEmptySets(exercises) {
+        exercises.forEach(function (ex) {
             ex.sets = ex.sets.filter(function (set) { return set.weight_kg != null || set.reps != null; });
         });
+    }
+
+    /* RIR is asked once per exercise, on the top set only, at Finish — not
+       live as sets are entered, so there's nothing to re-target mid-session.
+       The overlay never blocks Finish: proceeding past it (or dismissing it)
+       leaves any unanswered exercise's rpe untouched (null, same as every
+       other set). */
+    function promptFinish(s) {
+        var tops = [];
+        s.exercises.forEach(function (ex) {
+            var set = topSetForExercise(ex);
+            if (set) tops.push({ ex: ex, set: set });
+        });
+        if (!tops.length) { finishSession(s); return; }
+        openRirSheet(s, tops);
+    }
+
+    function openRirSheet(s, tops) {
+        var rows = tops.map(function (t) { return rirRow(t.set, t.ex.title); });
+        openSheet("How many more reps could you have done?", rows.concat([
+            el("button", {
+                class: "btn btn--primary btn--block", style: "margin-top:16px",
+                onclick: function () { closeSheet(); finishSession(s); },
+            }, ["Save session"]),
+        ]));
+    }
+
+    /* Selection state lives only in this closure, not on the set: the set
+       has nowhere to put "3+ was tapped" that's distinct from "never asked"
+       (both write rpe = null), and it doesn't need one — the sheet is thrown
+       away the moment Finish completes. */
+    function rirRow(set, title) {
+        var buttons = {};
+        function select(label) {
+            set.rpe = RIR_TO_RPE[label];
+            Object.keys(buttons).forEach(function (l) {
+                buttons[l].className = "btn btn--sm " + (l === label ? "btn--primary" : "btn--ghost");
+            });
+        }
+        Object.keys(RIR_TO_RPE).forEach(function (label) {
+            buttons[label] = el("button", {
+                class: "btn btn--sm btn--ghost", style: "flex:1",
+                onclick: function () { select(label); },
+            }, [label]);
+        });
+        return el("div", { class: "rir-row" }, [
+            el("div", { class: "rir-row__title", text: title }),
+            el("div", { class: "rir-row__buttons" }, Object.keys(RIR_TO_RPE).map(function (l) { return buttons[l]; })),
+        ]);
+    }
+
+    function finishSession(s) {
+        pruneEmptySets(s.exercises);
         s.end_time = new Date().toISOString();
         persistNow(s).then(function () {
             render();
@@ -979,34 +1047,44 @@
     }
 
     // ── Boot ────────────────────────────────────────────────────────
-    $("sync-chip").addEventListener("click", function () { syncNow(true); });
-    window.addEventListener("online", function () { refreshChip(); syncNow(false); pullRoutine(); });
-    window.addEventListener("offline", refreshChip);
-    // A swipe-away kill does not always fire visibilitychange first.
-    window.addEventListener("pagehide", function () { flushPersist(); });
-    document.addEventListener("visibilitychange", function () {
-        // Walking back into LAN range and reopening the tab should retry
-        // without waiting for the next manual sync press.
-        if (document.visibilityState !== "visible") { flushPersist(); return; }
-        syncNow(false);
-        // iOS silently drops the lock when the tab backgrounds.
-        if (wakeWanted) acquireWakeLock();
-    });
-
-    getMeta("exercises").then(function (list) { if (list) state.exerciseCache = list; });
-    getMeta("routine").then(function (r) {
-        state.routine = r;
-        if (state.activeId === null && !document.querySelector(".sheet-backdrop")) render();
-    });
-
-    if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/logger/sw.js", { scope: "/logger" }).catch(function (e) {
-            console.warn("[logger] SW registration failed:", e);
+    // Guarded so this file can also be `require()`d by node:test for its
+    // pure functions (see the export guard below), which has no DOM.
+    if (typeof document !== "undefined") {
+        $("sync-chip").addEventListener("click", function () { syncNow(true); });
+        window.addEventListener("online", function () { refreshChip(); syncNow(false); pullRoutine(); });
+        window.addEventListener("offline", refreshChip);
+        // A swipe-away kill does not always fire visibilitychange first.
+        window.addEventListener("pagehide", function () { flushPersist(); });
+        document.addEventListener("visibilitychange", function () {
+            // Walking back into LAN range and reopening the tab should retry
+            // without waiting for the next manual sync press.
+            if (document.visibilityState !== "visible") { flushPersist(); return; }
+            syncNow(false);
+            // iOS silently drops the lock when the tab backgrounds.
+            if (wakeWanted) acquireWakeLock();
         });
+
+        getMeta("exercises").then(function (list) { if (list) state.exerciseCache = list; });
+        getMeta("routine").then(function (r) {
+            state.routine = r;
+            if (state.activeId === null && !document.querySelector(".sheet-backdrop")) render();
+        });
+
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("/logger/sw.js", { scope: "/logger" }).catch(function (e) {
+                console.warn("[logger] SW registration failed:", e);
+            });
+        }
+
+        render();
+        pullExercises();
+        pullRoutine();
+        syncNow(false);
     }
 
-    render();
-    pullExercises();
-    pullRoutine();
-    syncNow(false);
+    /* Dev-only: exposes pure functions to node:test. `module` is undefined in
+       the browser, so this branch never runs there. */
+    if (typeof module !== "undefined" && module.exports) {
+        module.exports = { toPayload: toPayload, repRangeLowerBound: repRangeLowerBound, numOrNull: numOrNull, pruneEmptySets: pruneEmptySets, topSetForExercise: topSetForExercise };
+    }
 })();
