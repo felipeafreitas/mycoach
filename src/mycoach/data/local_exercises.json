@@ -1,0 +1,12 @@
+{
+  "_comment": "MyCoach-owned additions layered over the pinned free-exercise-db catalogue. IDs use the reserved mycoach: namespace so replacing the upstream snapshot cannot overwrite them.",
+  "exercises": [
+    {
+      "id": "mycoach:bulgarian-split-squat",
+      "name": "Bulgarian Split Squat",
+      "equipment": "dumbbell",
+      "primaryMuscles": ["quadriceps"],
+      "secondaryMuscles": ["glutes", "hamstrings"]
+    }
+  ]
+}

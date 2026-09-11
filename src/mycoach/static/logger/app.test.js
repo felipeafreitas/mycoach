@@ -1,6 +1,39 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { repRangeLowerBound, numOrNull, toPayload, pruneEmptySets, topSetForExercise } = require("./app.js");
+const {
+    repRangeLowerBound,
+    numOrNull,
+    toPayload,
+    pruneEmptySets,
+    topSetForExercise,
+    resolveExerciseChoice,
+    sessionExerciseFromRoutine,
+} = require("./app.js");
+
+test("resolveExerciseChoice turns a cached catalogue name into its stable id", () => {
+    const choice = resolveExerciseChoice("barbell squat", [
+        { id: "Barbell_Squat", name: "Barbell Squat" },
+    ]);
+
+    assert.deepEqual(choice, {
+        exercise_id: "Barbell_Squat",
+        title: "Barbell Squat",
+    });
+});
+
+test("sessionExerciseFromRoutine carries stable identity into offline state", () => {
+    const exercise = sessionExerciseFromRoutine({
+        exercise_id: "Barbell_Squat",
+        exercise_name: "Barbell Squat",
+        notes: null,
+        sets: 3,
+        rep_range: "8-10",
+        superset_group: null,
+    });
+
+    assert.equal(exercise.exercise_id, "Barbell_Squat");
+    assert.equal(exercise.title, "Barbell Squat");
+});
 
 test("repRangeLowerBound reads the lower bound of a range like '8-10'", () => {
     assert.equal(repRangeLowerBound("8-10"), 8);
@@ -37,6 +70,7 @@ test("toPayload flattens a session's exercises into one flat sets array", () => 
         notes: null,
         exercises: [
             {
+                exercise_id: "Barbell_Bench_Press_-_Medium_Grip",
                 title: "Bench Press",
                 notes: null,
                 superset_group: null,
@@ -54,6 +88,7 @@ test("toPayload flattens a session's exercises into one flat sets array", () => 
     assert.equal(payload.sport, "gym");
     assert.equal(payload.sets.length, 2);
     assert.deepEqual(payload.sets[0], {
+        exercise_id: "Barbell_Bench_Press_-_Medium_Grip",
         exercise_title: "Bench Press",
         exercise_notes: null,
         set_index: 1,

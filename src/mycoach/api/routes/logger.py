@@ -2,13 +2,13 @@
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import distinct, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from mycoach.api.deps import require_api_key
 from mycoach.database import get_db
-from mycoach.models.activity import Activity, GymWorkoutDetail
+from mycoach.exercise_catalogue import load_exercise_catalogue
 from mycoach.models.routine import RoutineDay, WorkoutRoutine
 from mycoach.schemas.routine import WorkoutRoutineRead
 
@@ -18,8 +18,13 @@ router = APIRouter(prefix="/api/logger", tags=["logger"])
 DEFAULT_USER_ID = 1
 
 
+class ExerciseListItem(BaseModel):
+    id: str
+    name: str
+
+
 class ExerciseListResponse(BaseModel):
-    exercises: list[str]
+    exercises: list[ExerciseListItem]
 
 
 @router.get(
@@ -30,18 +35,18 @@ class ExerciseListResponse(BaseModel):
 async def list_exercises(
     session: AsyncSession = Depends(get_db),
 ) -> ExerciseListResponse:
-    """Distinct exercise titles from the user's gym history.
+    """The stable exercise catalogue cached by the offline logger.
 
-    Cached locally by the offline logger for free-text autocomplete.
+    The dependency is retained so this route shares the logger API's normal
+    lifecycle even though the pinned catalogue itself is file-backed.
     """
-    stmt = (
-        select(distinct(GymWorkoutDetail.exercise_title))
-        .join(Activity, GymWorkoutDetail.activity_id == Activity.id)
-        .where(Activity.user_id == DEFAULT_USER_ID)
-        .order_by(GymWorkoutDetail.exercise_title)
+    del session
+    return ExerciseListResponse(
+        exercises=[
+            ExerciseListItem(id=exercise.id, name=exercise.name)
+            for exercise in load_exercise_catalogue()
+        ]
     )
-    result = await session.execute(stmt)
-    return ExerciseListResponse(exercises=list(result.scalars().all()))
 
 
 @router.get(

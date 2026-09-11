@@ -97,11 +97,12 @@ async def history_page(
         if a.id in gym_details:
             exercise_map: dict[str, list[GymWorkoutDetail]] = {}
             for d in gym_details[a.id]:
-                exercise_map.setdefault(d.exercise_title, []).append(d)
-            for ex_title, sets in exercise_map.items():
+                identity = d.exercise_id or f"custom:{d.exercise_title}"
+                exercise_map.setdefault(identity, []).append(d)
+            for sets in exercise_map.values():
                 exercises.append(
                     {
-                        "title": ex_title,
+                        "title": sets[0].exercise_title,
                         "sets": sets,
                     }
                 )

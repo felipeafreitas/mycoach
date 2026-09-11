@@ -6,11 +6,12 @@ from mycoach.coaching.context import (
     get_active_routine,
     get_availability_for_week,
     get_last_week_cardio_performance,
+    get_last_week_gym_performance,
     get_recent_plan_summaries,
     get_sport_profiles,
     get_today_planned_sessions,
 )
-from mycoach.models.activity import Activity
+from mycoach.models.activity import Activity, GymWorkoutDetail
 from mycoach.models.availability import WeeklyAvailability
 from mycoach.models.plan import PlannedSession, WeeklyPlan
 from mycoach.models.routine import RoutineDay, RoutineExercise, WorkoutRoutine
@@ -97,9 +98,7 @@ class TestGetActiveRoutine:
             routine = WorkoutRoutine(user_id=user.id, name="PPL")
             day = RoutineDay(name="Push", order_index=0)
             day.exercises.append(
-                RoutineExercise(
-                    exercise_name="Bench Press", sets=4, rep_range="6-8", order_index=0
-                )
+                RoutineExercise(exercise_name="Bench Press", sets=4, rep_range="6-8", order_index=0)
             )
             routine.days.append(day)
             session.add(routine)
@@ -119,6 +118,55 @@ class TestGetActiveRoutine:
 
             result = await get_active_routine(session, user.id)
             assert result is None
+
+
+class TestGetLastWeekGymPerformance:
+    async def test_matches_history_by_exercise_id_not_display_title(self) -> None:
+        async with test_session() as session:
+            user = User(email="t@t.com", name="T", fitness_level="beginner")
+            session.add(user)
+            await session.flush()
+            activity = Activity(
+                user_id=user.id,
+                sport="gym",
+                title="Legs",
+                start_time=datetime(2024, 6, 10, 9, 0),
+                data_source="logger",
+            )
+            session.add(activity)
+            await session.flush()
+            session.add_all(
+                [
+                    GymWorkoutDetail(
+                        activity_id=activity.id,
+                        exercise_id="Barbell_Squat",
+                        exercise_title="Back Squat",
+                        set_index=1,
+                    ),
+                    GymWorkoutDetail(
+                        activity_id=activity.id,
+                        exercise_id="Smith_Machine_Squat",
+                        exercise_title="Back Squat",
+                        set_index=2,
+                    ),
+                ]
+            )
+            await session.commit()
+
+            result = await get_last_week_gym_performance(
+                session, user.id, ["Barbell_Squat"], date(2024, 6, 17)
+            )
+
+            assert result == [
+                {
+                    "exercise_id": "Barbell_Squat",
+                    "exercise_title": "Back Squat",
+                    "set_index": 1,
+                    "weight_kg": None,
+                    "reps": None,
+                    "rpe": None,
+                }
+            ]
 
 
 class TestGetSportProfiles:
@@ -403,9 +451,7 @@ class TestGetLastWeekCardioPerformance:
                 )
             await session.commit()
 
-            result = await get_last_week_cardio_performance(
-                session, user.id, date(2024, 6, 10)
-            )
+            result = await get_last_week_cardio_performance(session, user.id, date(2024, 6, 10))
             sports = [a["sport"] for a in result]
             assert "running" in sports
             assert "swimming" in sports
@@ -434,9 +480,7 @@ class TestGetLastWeekCardioPerformance:
             )
             await session.commit()
 
-            result = await get_last_week_cardio_performance(
-                session, user.id, date(2024, 6, 10)
-            )
+            result = await get_last_week_cardio_performance(session, user.id, date(2024, 6, 10))
             assert len(result) == 1
             assert result[0]["distance_meters"] == 5200.0
             assert result[0]["avg_speed_mps"] == 2.89

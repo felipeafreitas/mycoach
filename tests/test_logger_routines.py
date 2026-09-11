@@ -88,6 +88,30 @@ class TestLoggerRoutines:
         assert day["exercises"][0]["sets"] == 3
 
     @pytest.mark.asyncio
+    async def test_routine_exercise_id_reaches_logger_cache(self, client, user: User) -> None:  # type: ignore[no-untyped-def]
+        payload = _routine_payload()
+        payload["days"][0]["exercises"][0]["exercise_id"] = "Barbell_Bench_Press_-_Medium_Grip"
+
+        create_resp = await client.post("/api/routines", json=payload)
+        assert create_resp.status_code == 201
+
+        logger_resp = await client.get("/api/logger/routines", headers={"X-API-Key": TOKEN})
+        exercise = logger_resp.json()["days"][0]["exercises"][0]
+        assert exercise["exercise_id"] == "Barbell_Bench_Press_-_Medium_Grip"
+
+    @pytest.mark.asyncio
+    async def test_canonical_name_resolves_to_id_when_old_client_omits_it(
+        self, client, user: User
+    ) -> None:  # type: ignore[no-untyped-def]
+        payload = _routine_payload()
+        payload["days"][0]["exercises"][0]["exercise_name"] = "Barbell Squat"
+
+        create_resp = await client.post("/api/routines", json=payload)
+
+        assert create_resp.status_code == 201
+        assert create_resp.json()["days"][0]["exercises"][0]["exercise_id"] == "Barbell_Squat"
+
+    @pytest.mark.asyncio
     async def test_only_active_routine_returned(self, client, user: User) -> None:  # type: ignore[no-untyped-def]
         await client.post("/api/routines", json=_routine_payload())
         second = _routine_payload()

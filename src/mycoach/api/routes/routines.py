@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from mycoach.database import get_db
+from mycoach.exercise_catalogue import exercise_id_for_name
 from mycoach.models.routine import RoutineDay, RoutineExercise, WorkoutRoutine
 from mycoach.schemas.routine import WorkoutRoutineCreate, WorkoutRoutineRead
 
@@ -55,6 +56,7 @@ async def create_routine(
         )
         for ex_data in day_data.exercises:
             ex = RoutineExercise(
+                exercise_id=ex_data.exercise_id or exercise_id_for_name(ex_data.exercise_name),
                 exercise_name=ex_data.exercise_name,
                 sets=ex_data.sets,
                 rep_range=ex_data.rep_range,
@@ -105,6 +107,7 @@ async def replace_routine(
         )
         for ex_data in day_data.exercises:
             ex = RoutineExercise(
+                exercise_id=ex_data.exercise_id or exercise_id_for_name(ex_data.exercise_name),
                 exercise_name=ex_data.exercise_name,
                 sets=ex_data.sets,
                 rep_range=ex_data.rep_range,

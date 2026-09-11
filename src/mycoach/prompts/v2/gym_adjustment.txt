@@ -25,11 +25,13 @@ Adjust the weights, RPE, and volume for today's gym session based on last week's
 - Consider health summary: poor sleep/recovery averages → conservative targets
 - Consider the full training log: high total volume across all sports → more conservative gym targets
 - Add coaching notes for form cues or technique reminders where helpful
+- Echo each routine exercise's `exercise_id` exactly; use null for a custom exercise
 
 Respond with a JSON object matching this exact schema:
 {{
   "exercises": [
     {{
+      "exercise_id": "Barbell_Bench_Press_-_Medium_Grip",
       "exercise_name": "Exercise name (must match routine)",
       "target_weight_kg": 80.0,
       "target_rpe": 7,

@@ -3,11 +3,55 @@
 from datetime import date
 
 from mycoach.coaching.prompt_builder import (
+    _format_gym_details,
     _format_gym_history,
+    _format_last_week_training_log,
     _format_plan_adherence,
     _format_weekly_gym_details,
     build_weekly_recap_prompt,
 )
+
+
+def _renamed_squat_sets() -> list[dict]:
+    return [
+        {
+            "exercise_id": "Barbell_Squat",
+            "exercise_title": "Barbell Squat",
+            "set_index": 1,
+            "weight_kg": 100,
+            "reps": 5,
+        },
+        {
+            "exercise_id": "Barbell_Squat",
+            "exercise_title": "Back Squat",
+            "set_index": 2,
+            "weight_kg": 102.5,
+            "reps": 5,
+        },
+    ]
+
+
+class TestStableExerciseGrouping:
+    def test_post_workout_details_group_by_exercise_id(self) -> None:
+        result = _format_gym_details(_renamed_squat_sets())
+
+        assert result.count("**Barbell Squat**") == 1
+        assert "**Back Squat**" not in result
+
+    def test_last_week_training_log_groups_by_exercise_id(self) -> None:
+        result = _format_last_week_training_log(
+            [
+                {
+                    "sport": "gym",
+                    "title": "Legs",
+                    "start_time": "2024-06-10",
+                    "gym_details": _renamed_squat_sets(),
+                }
+            ]
+        )
+
+        assert result.count("**Barbell Squat**") == 1
+        assert "**Back Squat**" not in result
 
 
 class TestFormatPlanAdherence:
@@ -78,6 +122,37 @@ class TestFormatWeeklyGymDetails:
         assert "80kg×8" in result
         assert "RPE7" in result
 
+    def test_groups_display_label_changes_by_exercise_id(self) -> None:
+        result = _format_weekly_gym_details(
+            [
+                {
+                    "session_date": "2024-06-10",
+                    "session_title": "Legs",
+                    "exercise_id": "Barbell_Squat",
+                    "exercise_title": "Barbell Squat",
+                    "set_index": 1,
+                    "set_type": "normal",
+                    "weight_kg": 100,
+                    "reps": 5,
+                    "rpe": None,
+                },
+                {
+                    "session_date": "2024-06-10",
+                    "session_title": "Legs",
+                    "exercise_id": "Barbell_Squat",
+                    "exercise_title": "Back Squat",
+                    "set_index": 2,
+                    "set_type": "normal",
+                    "weight_kg": 102.5,
+                    "reps": 5,
+                    "rpe": None,
+                },
+            ]
+        )
+
+        assert result.count("Barbell Squat:") == 1
+        assert "Back Squat:" not in result
+
     def test_groups_by_session(self) -> None:
         details = [
             {
@@ -112,6 +187,35 @@ class TestFormatGymHistory:
     def test_empty(self) -> None:
         result = _format_gym_history([])
         assert "No gym history" in result
+
+    def test_groups_renamed_display_labels_by_exercise_id(self) -> None:
+        result = _format_gym_history(
+            [
+                {
+                    "week_start": "2024-06-03",
+                    "exercise_id": "Barbell_Squat",
+                    "exercise_title": "Barbell Squat",
+                    "best_weight_kg": 100,
+                    "best_reps": 5,
+                    "total_sets": 3,
+                    "avg_rpe": 8,
+                },
+                {
+                    "week_start": "2024-06-10",
+                    "exercise_id": "Barbell_Squat",
+                    "exercise_title": "Back Squat",
+                    "best_weight_kg": 102.5,
+                    "best_reps": 5,
+                    "total_sets": 3,
+                    "avg_rpe": 8,
+                },
+            ]
+        )
+
+        assert result.count("**Barbell Squat**") == 1
+        assert "**Back Squat**" not in result
+        assert "Week Jun 03" in result
+        assert "Week Jun 10" in result
 
     def test_formats_week_over_week(self) -> None:
         history = [
